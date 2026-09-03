@@ -66,7 +66,7 @@ spec:
     targetRevision: 0.1.0
     helm:
       releaseName: k8s-pod-cleanup
-      valuesObject:
+      values: |
         schedule: "*/5 * * * *"
         cleanup:
           dryRun: true
@@ -105,7 +105,7 @@ spec:
     targetRevision: main
     path: chart/k8s-pod-cleanup
     helm:
-      valuesObject:
+      values: |
         schedule: "*/10 * * * *"
         cleanup:
           dryRun: false

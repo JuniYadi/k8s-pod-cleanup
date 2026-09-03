@@ -39,8 +39,8 @@ spec:
               securityContext:
                 {{- toYaml .Values.securityContext | nindent 16 }}
               args:
-                - --dry-run={{ .Values.cleanup.dryRun }}
-                - --force={{ .Values.cleanup.force }}
+                - --dry-run={{ .Values.cleanup.dryRun | default false }}
+                - --force={{ .Values.cleanup.force | default false }}
                 - --threshold-duration={{ .Values.cleanup.thresholdDuration }}
                 - --terminating-threshold={{ .Values.cleanup.terminatingThreshold }}
                 - --restart-threshold={{ .Values.cleanup.restartThreshold }}
