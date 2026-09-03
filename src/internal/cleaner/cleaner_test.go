@@ -2,15 +2,17 @@ package cleaner
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/juniyadi/k8s-pod-cleanup/internal/config"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
-
 func TestEvaluatePod(t *testing.T) {
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
 	cfg := &config.Config{
@@ -364,6 +366,115 @@ func TestEvaluatePod(t *testing.T) {
 				},
 			},
 			shouldDelete: true,
+		},
+		{
+			name: "InitContainer Waiting but restarts below threshold",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "init-low-restart-pod",
+					Namespace:         "default",
+					CreationTimestamp: metav1.Time{Time: now.Add(-1 * time.Minute)},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodPending,
+					InitContainerStatuses: []corev1.ContainerStatus{
+						{
+							Name:         "init-app",
+							RestartCount: 1,
+							State: corev1.ContainerState{
+								Waiting: &corev1.ContainerStateWaiting{
+									Reason: "ErrImagePull",
+								},
+							},
+						},
+					},
+				},
+			},
+			shouldDelete: false,
+		},
+		{
+			name: "InitContainer Waiting with ErrImagePull but fresh age",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "init-fresh-pod",
+					Namespace:         "default",
+					CreationTimestamp: metav1.Time{Time: now.Add(-1 * time.Minute)},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodPending,
+					InitContainerStatuses: []corev1.ContainerStatus{
+						{
+							Name:         "init-app",
+							RestartCount: 4,
+							State: corev1.ContainerState{
+								Waiting: &corev1.ContainerStateWaiting{
+									Reason: "ErrImagePull",
+								},
+							},
+						},
+					},
+				},
+			},
+			shouldDelete: false,
+		},
+		{
+			name: "Container Waiting with ErrImagePull but fresh age",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "container-fresh-pod",
+					Namespace:         "default",
+					CreationTimestamp: metav1.Time{Time: now.Add(-1 * time.Minute)},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodPending,
+					ContainerStatuses: []corev1.ContainerStatus{
+						{
+							Name:         "app",
+							RestartCount: 4,
+							State: corev1.ContainerState{
+								Waiting: &corev1.ContainerStateWaiting{
+									Reason: "ImagePullBackOff",
+								},
+							},
+						},
+					},
+				},
+			},
+			shouldDelete: false,
+		},
+		{
+			name: "Succeeded Pod Older than Threshold",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "succeeded-old-pod",
+					Namespace:         "default",
+					CreationTimestamp: metav1.Time{Time: now.Add(-10 * time.Minute)},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodSucceeded,
+				},
+			},
+			shouldDelete: true,
+		},
+		{
+			name: "Running Pod without Ready Condition (Missing)",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "running-no-ready-condition",
+					Namespace:         "default",
+					CreationTimestamp: metav1.Time{Time: now.Add(-10 * time.Minute)},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{
+						{
+							Type:   corev1.PodScheduled,
+							Status: corev1.ConditionTrue,
+						},
+					},
+				},
+			},
+			shouldDelete: false,
 		},
 	}
 
@@ -868,5 +979,134 @@ func TestIsCrashOrImageError(t *testing.T) {
 	}
 	if isCrashOrImageError("RandomOtherReason") {
 		t.Errorf("expected RandomOtherReason to not be recognized")
+	}
+}
+
+func TestCleanerRunListNamespacesError(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	cfg := &config.Config{
+		Namespaces: nil, // empty to force namespace list call
+	}
+	client := fake.NewSimpleClientset()
+	// Inject failure on namespaces list
+	client.PrependReactor("list", "namespaces", func(action k8stesting.Action) (handled bool, ret runtime.Object, err error) {
+		return true, nil, fmt.Errorf("api error listing namespaces")
+	})
+	cleaner := NewCleaner(client, cfg)
+	cleaner.SetNow(func() time.Time { return now })
+
+	err := cleaner.Run(context.Background())
+	if err == nil {
+		t.Errorf("expected error when namespace listing fails, got nil")
+	}
+}
+
+func TestCleanerRunListPodsError(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	cfg := &config.Config{
+		Namespaces: []string{"default"},
+	}
+	client := fake.NewSimpleClientset(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}})
+	client.PrependReactor("list", "pods", func(action k8stesting.Action) (handled bool, ret runtime.Object, err error) {
+		return true, nil, fmt.Errorf("api error listing pods")
+	})
+	cleaner := NewCleaner(client, cfg)
+	cleaner.SetNow(func() time.Time { return now })
+
+	// List pods error logs and continues gracefully
+	err := cleaner.Run(context.Background())
+	if err != nil {
+		t.Errorf("expected nil error (graceful skip), got: %v", err)
+	}
+}
+
+func TestCleanerDeletePodError(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	cfg := &config.Config{
+		Namespaces:        []string{"default"},
+		ThresholdDuration: 5 * time.Minute,
+	}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "bad-pod-delete-fail",
+			Namespace:         "default",
+			CreationTimestamp: metav1.Time{Time: now.Add(-10 * time.Minute)},
+		},
+		Status: corev1.PodStatus{
+			Phase:  corev1.PodFailed,
+			Reason: "Evicted",
+		},
+	}
+	client := fake.NewSimpleClientset(pod)
+	client.PrependReactor("delete", "pods", func(action k8stesting.Action) (handled bool, ret runtime.Object, err error) {
+		return true, nil, fmt.Errorf("api error deleting pod")
+	})
+	cleaner := NewCleaner(client, cfg)
+	cleaner.SetNow(func() time.Time { return now })
+
+	err := cleaner.Run(context.Background())
+	if err != nil {
+		t.Errorf("expected nil error when delete fails gracefully, got: %v", err)
+	}
+}
+
+func TestEvacuateHighPressureNodesErrors(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	cfg := &config.Config{
+		EnableNodePressureEviction: true,
+		NodePressureDuration:       1 * time.Minute,
+		NodePressureCordon:         true,
+	}
+
+	// 1. List nodes error
+	client1 := fake.NewSimpleClientset()
+	client1.PrependReactor("list", "nodes", func(action k8stesting.Action) (handled bool, ret runtime.Object, err error) {
+		return true, nil, fmt.Errorf("api error listing nodes")
+	})
+	cleaner1 := NewCleaner(client1, cfg)
+	cleaner1.SetNow(func() time.Time { return now })
+	err := cleaner1.EvacuateHighPressureNodes(context.Background())
+	if err == nil {
+		t.Errorf("expected error when listing nodes fails, got nil")
+	}
+
+	// 2. Node update (cordon) and pod delete error
+	pressuredNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "pressured-node-err"},
+		Spec:       corev1.NodeSpec{Unschedulable: false},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{
+				{
+					Type:               corev1.NodeMemoryPressure,
+					Status:             corev1.ConditionTrue,
+					LastTransitionTime: metav1.Time{Time: now.Add(-2 * time.Minute)},
+				},
+			},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "err-pod",
+			Namespace: "default",
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "pressured-node-err",
+		},
+	}
+
+	client2 := fake.NewSimpleClientset(pressuredNode, pod)
+	client2.PrependReactor("update", "nodes", func(action k8stesting.Action) (handled bool, ret runtime.Object, err error) {
+		return true, nil, fmt.Errorf("api error cordoning node")
+	})
+	client2.PrependReactor("delete", "pods", func(action k8stesting.Action) (handled bool, ret runtime.Object, err error) {
+		return true, nil, fmt.Errorf("api error deleting pod")
+	})
+
+	cleaner2 := NewCleaner(client2, cfg)
+	cleaner2.SetNow(func() time.Time { return now })
+	err = cleaner2.EvacuateHighPressureNodes(context.Background())
+	if err != nil {
+		t.Errorf("expected nil error (graceful logging), got: %v", err)
 	}
 }
