@@ -28,18 +28,17 @@ A lightweight, automated Kubernetes CronJob written in Go that scans cluster nam
 
 ```bash
 # Install with Dry-Run mode enabled for safety verification
-helm install k8s-pod-cleanup oci://ghcr.io/juniyadi/charts/k8s-pod-cleanup \
-  --version 1.0.0 \
+helm install k8s-pod-cleanup oci://ghcr.io/juniyadi/k8s-pod-cleanup/charts/k8s-pod-cleanup \
+  --version 0.1.0 \
   --namespace kube-system \
   --set cleanup.dryRun=true
 
 # Deploy active deletion mode
-helm upgrade --install k8s-pod-cleanup oci://ghcr.io/juniyadi/charts/k8s-pod-cleanup \
-  --version 1.0.0 \
+helm upgrade --install k8s-pod-cleanup oci://ghcr.io/juniyadi/k8s-pod-cleanup/charts/k8s-pod-cleanup \
+  --version 0.1.0 \
   --namespace kube-system \
   --set cleanup.dryRun=false \
   --set cleanup.thresholdDuration=5m
-```
 
 ---
 
@@ -62,15 +61,15 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: ghcr.io/juniyadi/charts
+    repoURL: ghcr.io/juniyadi/k8s-pod-cleanup/charts
     chart: k8s-pod-cleanup
-    targetRevision: 1.0.0
+    targetRevision: 0.1.0
     helm:
       releaseName: k8s-pod-cleanup
       valuesObject:
         schedule: "*/5 * * * *"
         cleanup:
-          dryRun: false
+          dryRun: true
           force: false
           thresholdDuration: "5m"
           terminatingThreshold: "5m"
@@ -79,7 +78,6 @@ spec:
             - kube-system
             - kube-public
             - kube-node-lease
-  destination:
     server: https://kubernetes.default.svc
     namespace: kube-system
   syncPolicy:
