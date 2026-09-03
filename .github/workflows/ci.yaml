@@ -27,6 +27,12 @@ jobs:
           go vet ./...
           go test -v -race -coverprofile=coverage.out ./...
 
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: src/coverage.out
+
   lint-helm:
     name: Lint Helm Chart
     runs-on: ubuntu-latest
