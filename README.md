@@ -39,6 +39,7 @@ helm upgrade --install k8s-pod-cleanup oci://ghcr.io/juniyadi/k8s-pod-cleanup/ch
   --namespace kube-system \
   --set cleanup.dryRun=false \
   --set cleanup.thresholdDuration=5m
+```
 
 ---
 
@@ -123,20 +124,20 @@ spec:
 
 ## ⚙️ Configuration Parameters
 
-| Parameter | Description | Default |
-| :--- | :--- | :--- |
-| `schedule` | Cron schedule expression | `"*/5 * * * *"` |
-| `image.repository` | Container image repository | `ghcr.io/juniyadi/k8s-pod-cleanup` |
-| `image.tag` | Container image tag | `1.0.0` |
-| `cleanup.dryRun` | Simulate pod cleanup without deleting | `false` |
-| `cleanup.force` | Force delete pods with 0 grace period | `false` |
-| `cleanup.thresholdDuration` | Age/duration required before deleting an unhealthy pod | `"5m"` |
-| `cleanup.terminatingThreshold` | Threshold duration for stuck terminating pods | `"5m"` |
-| `cleanup.restartThreshold` | Minimum restart count for CrashLoop pods | `3` |
-| `cleanup.ignoreAnnotation` | Annotation or label key used to ignore pods | `"cleanup.k8s.io/ignore"` |
-| `cleanup.namespaces` | Target namespaces list (empty list scans all) | `[]` |
-| `cleanup.excludedNamespaces` | Namespaces excluded from evaluation | `[kube-system, kube-public, kube-node-lease]` |
-| `cleanup.logLevel` | Logging verbosity (`debug`, `info`, `warn`, `error`) | `"info"` |
+| Parameter                      | Description                                            | Default                                       |
+| :----------------------------- | :----------------------------------------------------- | :-------------------------------------------- |
+| `schedule`                     | Cron schedule expression                               | `"*/5 * * * *"`                               |
+| `image.repository`             | Container image repository                             | `ghcr.io/juniyadi/k8s-pod-cleanup`            |
+| `image.tag`                    | Container image tag                                    | `1.0.0`                                       |
+| `cleanup.dryRun`               | Simulate pod cleanup without deleting                  | `false`                                       |
+| `cleanup.force`                | Force delete pods with 0 grace period                  | `false`                                       |
+| `cleanup.thresholdDuration`    | Age/duration required before deleting an unhealthy pod | `"5m"`                                        |
+| `cleanup.terminatingThreshold` | Threshold duration for stuck terminating pods          | `"5m"`                                        |
+| `cleanup.restartThreshold`     | Minimum restart count for CrashLoop pods               | `3`                                           |
+| `cleanup.ignoreAnnotation`     | Annotation or label key used to ignore pods            | `"cleanup.k8s.io/ignore"`                     |
+| `cleanup.namespaces`           | Target namespaces list (empty list scans all)          | `[]`                                          |
+| `cleanup.excludedNamespaces`   | Namespaces excluded from evaluation                    | `[kube-system, kube-public, kube-node-lease]` |
+| `cleanup.logLevel`             | Logging verbosity (`debug`, `info`, `warn`, `error`)   | `"info"`                                      |
 
 ---
 
