@@ -14,6 +14,10 @@ func TestConfigEnvOverrides(t *testing.T) {
 	os.Setenv("THRESHOLD_DURATION", "10m")
 	os.Setenv("RESTART_THRESHOLD", "5")
 	os.Setenv("LOG_LEVEL", "debug")
+	os.Setenv("ENABLE_NODE_PRESSURE_EVICTION", "true")
+	os.Setenv("NODE_PRESSURE_DURATION", "2m")
+	os.Setenv("NODE_PRESSURE_FORCE_DELETE", "true")
+	os.Setenv("NODE_PRESSURE_CORDON", "true")
 	defer func() {
 		os.Unsetenv("NAMESPACES")
 		os.Unsetenv("EXCLUDED_NAMESPACES")
@@ -22,6 +26,10 @@ func TestConfigEnvOverrides(t *testing.T) {
 		os.Unsetenv("THRESHOLD_DURATION")
 		os.Unsetenv("RESTART_THRESHOLD")
 		os.Unsetenv("LOG_LEVEL")
+		os.Unsetenv("ENABLE_NODE_PRESSURE_EVICTION")
+		os.Unsetenv("NODE_PRESSURE_DURATION")
+		os.Unsetenv("NODE_PRESSURE_FORCE_DELETE")
+		os.Unsetenv("NODE_PRESSURE_CORDON")
 	}()
 
 	cfg, err := ParseFlags()
@@ -55,6 +63,22 @@ func TestConfigEnvOverrides(t *testing.T) {
 
 	if cfg.LogLevel != "debug" {
 		t.Errorf("expected log level debug, got %s", cfg.LogLevel)
+	}
+
+	if !cfg.EnableNodePressureEviction {
+		t.Errorf("expected enable-node-pressure-eviction to be true")
+	}
+
+	if cfg.NodePressureDuration != 2*time.Minute {
+		t.Errorf("expected 2m node pressure duration, got %v", cfg.NodePressureDuration)
+	}
+
+	if !cfg.NodePressureForceDelete {
+		t.Errorf("expected node-pressure-force-delete to be true")
+	}
+
+	if !cfg.NodePressureCordon {
+		t.Errorf("expected node-pressure-cordon to be true")
 	}
 }
 

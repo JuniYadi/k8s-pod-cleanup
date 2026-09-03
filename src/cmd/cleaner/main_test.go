@@ -105,3 +105,23 @@ users:
 		t.Logf("main exited as expected with code %d", exitCode)
 	}
 }
+
+func TestMainSuccess(t *testing.T) {
+	// Intercept osExit
+	var exitCode int
+	osExit = func(code int) {
+		exitCode = code
+	}
+	defer func() {
+		osExit = os.Exit
+	}()
+
+	// Test running main when getKubernetesConfig fails (invalid config)
+	os.Setenv("KUBECONFIG", "/nonexistent/path/to/kubeconfig")
+	defer os.Unsetenv("KUBECONFIG")
+
+	main()
+	if exitCode != 1 {
+		t.Errorf("expected exit code 1 on config error, got %d", exitCode)
+	}
+}

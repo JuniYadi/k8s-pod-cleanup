@@ -54,6 +54,28 @@ cleanup:
     - kube-public
     - kube-node-lease
 
+
+# Node Pressure Pod Evacuation CronJob configuration
+nodePressureEviction:
+  # Enable or disable the dedicated fast CronJob for node pressure pod evacuation
+  enabled: true
+  # Schedule for node pressure checks (default: every 2 minutes)
+  schedule: "*/2 * * * *"
+  # When true, logs what would be cordoned/evicted without modifying nodes/pods
+  dryRun: false
+  # Minimum duration a node must experience sustained pressure before evacuating pods
+  pressureDuration: "1m"
+  # Force delete pods immediately (gracePeriodSeconds=0) when evacuating from pressured node
+  forceDelete: true
+  # Cordon the node (mark unschedulable) when sustained pressure is detected
+  cordon: true
+  # Concurrency policy for the node pressure cronjob
+  concurrencyPolicy: Forbid
+  # History limits
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  # Custom resources for node pressure job container if different from default
+  resources: {}
 podAnnotations: {}
 podLabels: {}
 
