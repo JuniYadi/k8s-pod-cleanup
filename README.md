@@ -28,15 +28,14 @@ A lightweight, automated Kubernetes CronJob written in Go that scans cluster nam
 ### Option 1: Direct Helm OCI Install
 
 ```bash
-# Install with Dry-Run mode enabled for safety verification
 helm install k8s-pod-cleanup oci://ghcr.io/juniyadi/k8s-pod-cleanup/charts/k8s-pod-cleanup \
-  --version 0.1.0 \
+  --version 0.2.0 \
   --namespace kube-system \
   --set cleanup.dryRun=true
 
 # Deploy active deletion mode
 helm upgrade --install k8s-pod-cleanup oci://ghcr.io/juniyadi/k8s-pod-cleanup/charts/k8s-pod-cleanup \
-  --version 0.1.0 \
+  --version 0.2.0 \
   --namespace kube-system \
   --set cleanup.dryRun=false \
   --set cleanup.thresholdDuration=5m
@@ -63,9 +62,8 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: ghcr.io/juniyadi/k8s-pod-cleanup/charts
     chart: k8s-pod-cleanup
-    targetRevision: 0.1.0
+    targetRevision: 0.2.0
     helm:
       releaseName: k8s-pod-cleanup
       values: |
