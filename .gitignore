@@ -1,0 +1,27 @@
+# Binaries & Build Output
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test & Coverage
+*.out
+*.test
+coverage.txt
+coverage.out
+
+# Helm release packages & dependencies
+chart/k8s-pod-cleanup/charts/
+chart/k8s-pod-cleanup/tmpcharts/
+.cr-release-packages/
+*.tgz
+
+# OS / IDE files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

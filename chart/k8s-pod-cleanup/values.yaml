@@ -1,0 +1,84 @@
+# Default values for k8s-pod-cleanup.
+
+schedule: "*/5 * * * *"
+concurrencyPolicy: Forbid
+restartPolicy: OnFailure
+successfulJobsHistoryLimit: 3
+failedJobsHistoryLimit: 3
+
+image:
+  repository: ghcr.io/juniyadi/k8s-pod-cleanup
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: "1.0.0"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Automatically mount a ServiceAccount's API credentials?
+  automountServiceAccountToken: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+rbac:
+  # Specifies whether RBAC resources (ClusterRole & ClusterRoleBinding) should be created
+  create: true
+
+cleanup:
+  # When true, logs the pods to be cleaned up without actually deleting them
+  dryRun: false
+  # When true, force deletes pods immediately (gracePeriodSeconds=0)
+  force: false
+  # Minimum age duration before an unhealthy pod is considered for cleanup
+  thresholdDuration: "5m"
+  # Threshold for pods stuck in Terminating status
+  terminatingThreshold: "5m"
+  # Number of container restarts required for CrashLoopBackOff/ImagePullBackOff detection
+  restartThreshold: 3
+  # Annotation or label key used to ignore pods from cleanup
+  ignoreAnnotation: "cleanup.k8s.io/ignore"
+  # Log level (debug, info, warn, error)
+  logLevel: "info"
+  # Specific namespaces to scan (empty list means all namespaces)
+  namespaces: []
+  # Namespaces excluded from cleanup
+  excludedNamespaces:
+    - kube-system
+    - kube-public
+    - kube-node-lease
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 32Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

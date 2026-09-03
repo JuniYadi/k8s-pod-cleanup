@@ -1,0 +1,68 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "k8s-pod-cleanup.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "k8s-pod-cleanup.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  concurrencyPolicy: {{ .Values.concurrencyPolicy | default "Forbid" }}
+  successfulJobsHistoryLimit: {{ .Values.successfulJobsHistoryLimit | default 3 }}
+  failedJobsHistoryLimit: {{ .Values.failedJobsHistoryLimit | default 3 }}
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "k8s-pod-cleanup.selectorLabels" . | nindent 12 }}
+            {{- with .Values.podLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.podAnnotations }}
+          annotations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        spec:
+          restartPolicy: {{ .Values.restartPolicy | default "OnFailure" }}
+          serviceAccountName: {{ include "k8s-pod-cleanup.serviceAccountName" . }}
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: {{ .Chart.Name }}
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              args:
+                - --dry-run={{ .Values.cleanup.dryRun }}
+                - --force={{ .Values.cleanup.force }}
+                - --threshold-duration={{ .Values.cleanup.thresholdDuration }}
+                - --terminating-threshold={{ .Values.cleanup.terminatingThreshold }}
+                - --restart-threshold={{ .Values.cleanup.restartThreshold }}
+                - --ignore-annotation={{ .Values.cleanup.ignoreAnnotation }}
+                - --log-level={{ .Values.cleanup.logLevel }}
+                {{- if .Values.cleanup.namespaces }}
+                - --namespaces={{ .Values.cleanup.namespaces | join "," }}
+                {{- end }}
+                {{- if .Values.cleanup.excludedNamespaces }}
+                - --excluded-namespaces={{ .Values.cleanup.excludedNamespaces | join "," }}
+                {{- end }}
+              resources:
+                {{- toYaml .Values.resources | nindent 16 }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
