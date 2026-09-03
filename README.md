@@ -14,6 +14,7 @@ A lightweight, automated Kubernetes CronJob written in Go that scans cluster nam
 - **Stuck Pending & Evicted Pods**: Removes pods stuck in `Pending` or stale `Evicted` / `Failed` / `Error` state.
 - **Unready Running Pods**: Identifies `Running` pods whose `Ready` condition remains `False` continuously for longer than the grace threshold (does **never** touch healthy `Running` pods).
 - **Stuck Terminating Pods**: Cleans up pods stuck in `Terminating` lifecycle beyond threshold.
+- **Node High-Pressure Evacuation & Cordoning**: Automatically detects nodes experiencing sustained resource pressure (`MemoryPressure`, `DiskPressure`, `PIDPressure`, or `NotReady` for $\ge 1\text{m}$), cordons the node (`Unschedulable = true`), and evacuates pods with forced cleanup fallback so workloads are rescheduled on healthy nodes.
 - **Safety Exclusions**:
   - Automatically skips critical namespaces (`kube-system`, `kube-public`, `kube-node-lease`, and custom namespaces).
   - Pod opt-out via annotation/label `cleanup.k8s.io/ignore: "true"`.
@@ -138,6 +139,12 @@ spec:
 | `cleanup.namespaces`           | Target namespaces list (empty list scans all)          | `[]`                                          |
 | `cleanup.excludedNamespaces`   | Namespaces excluded from evaluation                    | `[kube-system, kube-public, kube-node-lease]` |
 | `cleanup.logLevel`             | Logging verbosity (`debug`, `info`, `warn`, `error`)   | `"info"`                                      |
+| `nodePressureEviction.enabled`           | Enable dedicated fast CronJob for node pressure evacuation | `true`                                        |
+| `nodePressureEviction.schedule`          | Cron schedule for node pressure checks                 | `"*/2 * * * *"`                               |
+| `nodePressureEviction.dryRun`            | Dry-run simulation for node pressure evaluation        | `false`                                       |
+| `nodePressureEviction.pressureDuration`  | Sustained node pressure duration threshold             | `"1m"`                                        |
+| `nodePressureEviction.forceDelete`       | Force delete pods (gracePeriodSeconds=0) on bad nodes  | `true`                                        |
+| `nodePressureEviction.cordon`            | Mark pressured node unschedulable                      | `true`                                        |
 
 ---
 

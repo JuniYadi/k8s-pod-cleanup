@@ -11,6 +11,12 @@ A Kubernetes `Pod` resource evaluated across cluster namespaces to determine whe
 - **Stale Unready Running Pod**: A Pod in `Running` phase whose `Ready` condition is `False` continuously for longer than the grace threshold. Pods in `Running` with `Ready == True` are strictly invariant and never marked unhealthy.
 - **Stale Terminating Pod**: A Pod stuck in termination lifecycle with non-nil `DeletionTimestamp` exceeding `terminating-threshold`.
 
+### Node Pressure Condition
+A Kubernetes `Node` undergoing sustained resource pressure (`MemoryPressure`, `DiskPressure`, `PIDPressure`, or `Ready` condition in `False`/`Unknown` status) where `time.Since(condition.LastTransitionTime)` exceeds the configured `node-pressure-duration` (default `1m`).
+When sustained node pressure is detected:
+- The node is cordoned (`Unschedulable = true`) to prevent new workloads from landing.
+- Non-DaemonSet pods on the node in non-excluded namespaces are evacuated (with force deletion fallback) so controllers recreate them on healthy nodes.
+
 ### Exclusion Rule
 Rules protecting Pods from deletion:
 - **Namespace Exclusion**: Blacklisted namespaces (`kube-system`, `kube-public`, `kube-node-lease`, and user-configured namespaces).

@@ -48,8 +48,14 @@ func (c *Cleaner) Run(ctx context.Context) error {
 		"force", c.cfg.Force,
 		"thresholdDuration", c.cfg.ThresholdDuration.String(),
 		"restartThreshold", c.cfg.RestartThreshold,
+		"enableNodePressureEviction", c.cfg.EnableNodePressureEviction,
 	)
 
+	if c.cfg.EnableNodePressureEviction {
+		if err := c.EvacuateHighPressureNodes(ctx); err != nil {
+			slog.Error("Error during node pressure evaluation and evacuation", "error", err)
+		}
+	}
 	var targetNamespaces []string
 	if len(c.cfg.Namespaces) > 0 {
 		targetNamespaces = c.cfg.Namespaces
@@ -259,6 +265,205 @@ func isCrashOrImageError(reason string) bool {
 	switch reason {
 	case "CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "CreateContainerConfigError", "CreateContainerError":
 		return true
+	}
+	return false
+}
+
+// NodePressureInfo contains details of a node under sustained resource pressure.
+type NodePressureInfo struct {
+	NodeName       string
+	Conditions     []string
+	PressureSince  time.Time
+	Duration       time.Duration
+}
+
+// EvaluateNode checks if a node is experiencing sustained pressure beyond configured duration.
+func (c *Cleaner) EvaluateNode(node *corev1.Node) (bool, []string, time.Duration) {
+	var activePressures []string
+	var longestDuration time.Duration
+
+	pressureConditionTypes := []corev1.NodeConditionType{
+		corev1.NodeMemoryPressure,
+		corev1.NodeDiskPressure,
+		corev1.NodePIDPressure,
+	}
+
+	now := c.now()
+
+	for _, cond := range node.Status.Conditions {
+		// Check standard pressure conditions (MemoryPressure, DiskPressure, PIDPressure == True)
+		for _, pt := range pressureConditionTypes {
+			if cond.Type == pt && cond.Status == corev1.ConditionTrue {
+				duration := now.Sub(cond.LastTransitionTime.Time)
+				if duration >= c.cfg.NodePressureDuration {
+					activePressures = append(activePressures, fmt.Sprintf("%s(active for %s)", cond.Type, duration.Round(time.Second)))
+					if duration > longestDuration {
+						longestDuration = duration
+					}
+				}
+			}
+		}
+
+		// Check Node Ready condition (Ready == False or Ready == Unknown)
+		if cond.Type == corev1.NodeReady && cond.Status != corev1.ConditionTrue {
+			duration := now.Sub(cond.LastTransitionTime.Time)
+			if duration >= c.cfg.NodePressureDuration {
+				activePressures = append(activePressures, fmt.Sprintf("NodeNotReady[status=%s](active for %s)", cond.Status, duration.Round(time.Second)))
+				if duration > longestDuration {
+					longestDuration = duration
+				}
+			}
+		}
+	}
+
+	return len(activePressures) > 0, activePressures, longestDuration
+}
+
+// EvacuateHighPressureNodes discovers nodes under sustained pressure, cordons them, and cleans up pods.
+func (c *Cleaner) EvacuateHighPressureNodes(ctx context.Context) error {
+	slog.Info("Evaluating cluster nodes for sustained pressure",
+		"nodePressureDuration", c.cfg.NodePressureDuration.String(),
+		"forceDelete", c.cfg.NodePressureForceDelete,
+		"cordon", c.cfg.NodePressureCordon,
+	)
+
+	nodes, err := c.client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to list cluster nodes: %w", err)
+	}
+
+	pressuredNodesCount := 0
+	totalPodsEvacuated := 0
+
+	for i := range nodes.Items {
+		node := &nodes.Items[i]
+		isPressured, pressures, maxDuration := c.EvaluateNode(node)
+		if !isPressured {
+			continue
+		}
+
+		pressuredNodesCount++
+		slog.Warn("Node identified under sustained resource pressure",
+			"node", node.Name,
+			"pressures", strings.Join(pressures, ", "),
+			"duration", maxDuration.Round(time.Second).String(),
+			"dryRun", c.cfg.DryRun,
+		)
+
+		// Cordon node if enabled
+		if c.cfg.NodePressureCordon && !node.Spec.Unschedulable {
+			if c.cfg.DryRun {
+				slog.Info("Dry-run: would cordon node", "node", node.Name)
+			} else {
+				nodeCopy := node.DeepCopy()
+				nodeCopy.Spec.Unschedulable = true
+				if _, err := c.client.CoreV1().Nodes().Update(ctx, nodeCopy, metav1.UpdateOptions{}); err != nil {
+					slog.Error("Failed to cordon node", "node", node.Name, "error", err)
+				} else {
+					slog.Info("Successfully cordoned pressured node", "node", node.Name)
+				}
+			}
+		}
+
+		// Find and evict/delete pods running on this node
+		pods, err := c.client.CoreV1().Pods("").List(ctx, metav1.ListOptions{
+			FieldSelector: fmt.Sprintf("spec.nodeName=%s", node.Name),
+		})
+		if err != nil {
+			slog.Error("Failed to list pods on pressured node", "node", node.Name, "error", err)
+			continue
+		}
+
+		for j := range pods.Items {
+			pod := &pods.Items[j]
+
+			// Explicit check for nodeName matching (fake client doesn't filter by fieldSelector automatically)
+			if pod.Spec.NodeName != node.Name {
+				continue
+			}
+			// Skip excluded namespaces (e.g. kube-system)
+			if c.isNamespaceExcluded(pod.Namespace) {
+				slog.Debug("Skipping pod on pressured node in excluded namespace",
+					"namespace", pod.Namespace,
+					"pod", pod.Name,
+					"node", node.Name,
+				)
+				continue
+			}
+
+			// Skip pods marked with ignore annotation/label
+			if c.isOptedOut(pod) {
+				slog.Debug("Skipping opted-out pod on pressured node",
+					"namespace", pod.Namespace,
+					"pod", pod.Name,
+					"node", node.Name,
+				)
+				continue
+			}
+
+			// Skip DaemonSet pods (they cannot be rescheduled elsewhere)
+			if isDaemonSetPod(pod) {
+				slog.Debug("Skipping DaemonSet pod on pressured node",
+					"namespace", pod.Namespace,
+					"pod", pod.Name,
+					"node", node.Name,
+				)
+				continue
+			}
+
+			slog.Warn("Evacuating pod from pressured node",
+				"namespace", pod.Namespace,
+				"pod", pod.Name,
+				"node", node.Name,
+				"pressures", strings.Join(pressures, ", "),
+				"force", c.cfg.NodePressureForceDelete,
+				"dryRun", c.cfg.DryRun,
+			)
+
+			if c.cfg.DryRun {
+				totalPodsEvacuated++
+				continue
+			}
+
+			deleteOpts := metav1.DeleteOptions{}
+			if c.cfg.NodePressureForceDelete {
+				var zero int64 = 0
+				deleteOpts.GracePeriodSeconds = &zero
+			}
+
+			if err := c.client.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, deleteOpts); err != nil {
+				slog.Error("Failed to evacuate pod from pressured node",
+					"namespace", pod.Namespace,
+					"pod", pod.Name,
+					"node", node.Name,
+					"error", err,
+				)
+			} else {
+				totalPodsEvacuated++
+				slog.Info("Successfully evacuated pod from pressured node",
+					"namespace", pod.Namespace,
+					"pod", pod.Name,
+					"node", node.Name,
+					"force", c.cfg.NodePressureForceDelete,
+				)
+			}
+		}
+	}
+
+	slog.Info("Node pressure evaluation completed",
+		"pressuredNodesCount", pressuredNodesCount,
+		"totalPodsEvacuated", totalPodsEvacuated,
+		"dryRun", c.cfg.DryRun,
+	)
+
+	return nil
+}
+
+func isDaemonSetPod(pod *corev1.Pod) bool {
+	for _, ownerRef := range pod.OwnerReferences {
+		if ownerRef.Kind == "DaemonSet" {
+			return true
+		}
 	}
 	return false
 }

@@ -1,0 +1,69 @@
+{{- if .Values.nodePressureEviction.enabled -}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "k8s-pod-cleanup.fullname" . }}-node-pressure
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "k8s-pod-cleanup.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node-pressure-eviction
+spec:
+  schedule: {{ .Values.nodePressureEviction.schedule | default "*/2 * * * *" | quote }}
+  concurrencyPolicy: {{ .Values.nodePressureEviction.concurrencyPolicy | default .Values.concurrencyPolicy | default "Forbid" }}
+  successfulJobsHistoryLimit: {{ .Values.nodePressureEviction.successfulJobsHistoryLimit | default .Values.successfulJobsHistoryLimit | default 3 }}
+  failedJobsHistoryLimit: {{ .Values.nodePressureEviction.failedJobsHistoryLimit | default .Values.failedJobsHistoryLimit | default 3 }}
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "k8s-pod-cleanup.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: node-pressure-eviction
+            {{- with .Values.podLabels }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.podAnnotations }}
+          annotations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        spec:
+          restartPolicy: {{ .Values.restartPolicy | default "OnFailure" }}
+          serviceAccountName: {{ include "k8s-pod-cleanup.serviceAccountName" . }}
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          containers:
+            - name: {{ .Chart.Name }}-node-pressure
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              args:
+                - --enable-node-pressure-eviction=true
+                - --node-pressure-duration={{ .Values.nodePressureEviction.pressureDuration | default "1m" }}
+                - --node-pressure-force-delete={{ .Values.nodePressureEviction.forceDelete | default true }}
+                - --node-pressure-cordon={{ .Values.nodePressureEviction.cordon | default true }}
+                - --dry-run={{ .Values.nodePressureEviction.dryRun | default false }}
+                - --ignore-annotation={{ .Values.cleanup.ignoreAnnotation }}
+                - --log-level={{ .Values.cleanup.logLevel }}
+                {{- if .Values.cleanup.excludedNamespaces }}
+                - --excluded-namespaces={{ .Values.cleanup.excludedNamespaces | join "," }}
+                {{- end }}
+              resources:
+                {{- toYaml (default .Values.resources .Values.nodePressureEviction.resources) | nindent 16 }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

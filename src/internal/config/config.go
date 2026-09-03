@@ -10,16 +10,20 @@ import (
 
 // Config represents runtime settings for the cleaner.
 type Config struct {
-	Kubeconfig           string
-	Namespaces           []string // if empty, scan all namespaces
-	ExcludedNamespaces   []string
-	IgnoreAnnotation     string
-	ThresholdDuration    time.Duration
-	RestartThreshold     int32
-	DryRun               bool
-	Force                bool
-	LogLevel             string
-	TerminationThreshold time.Duration
+	Kubeconfig                  string
+	Namespaces                  []string // if empty, scan all namespaces
+	ExcludedNamespaces          []string
+	IgnoreAnnotation            string
+	ThresholdDuration           time.Duration
+	RestartThreshold            int32
+	DryRun                      bool
+	Force                       bool
+	LogLevel                    string
+	TerminationThreshold        time.Duration
+	EnableNodePressureEviction  bool
+	NodePressureDuration        time.Duration
+	NodePressureForceDelete     bool
+	NodePressureCordon          bool
 }
 
 // DefaultExcludedNamespaces is the default list of system namespaces to skip.
@@ -45,6 +49,10 @@ func ParseFlags() (*Config, error) {
 	flag.BoolVar(&cfg.DryRun, "dry-run", getEnvBool("DRY_RUN", false), "Simulate pod deletion without performing actual API calls.")
 	flag.BoolVar(&cfg.Force, "force", getEnvBool("FORCE", false), "Force delete pod immediately with zero grace period (gracePeriodSeconds=0).")
 	flag.StringVar(&cfg.LogLevel, "log-level", getEnv("LOG_LEVEL", "info"), "Logging level: debug, info, warn, error.")
+	flag.BoolVar(&cfg.EnableNodePressureEviction, "enable-node-pressure-eviction", getEnvBool("ENABLE_NODE_PRESSURE_EVICTION", false), "Enable eviction of pods from nodes under sustained resource pressure.")
+	flag.DurationVar(&cfg.NodePressureDuration, "node-pressure-duration", getEnvDuration("NODE_PRESSURE_DURATION", 1*time.Minute), "Minimum duration a node must be under pressure before evicting pods.")
+	flag.BoolVar(&cfg.NodePressureForceDelete, "node-pressure-force-delete", getEnvBool("NODE_PRESSURE_FORCE_DELETE", true), "Force delete pods immediately (gracePeriodSeconds=0) when evicting from pressured nodes.")
+	flag.BoolVar(&cfg.NodePressureCordon, "node-pressure-cordon", getEnvBool("NODE_PRESSURE_CORDON", true), "Cordon node (mark unschedulable) when node pressure is detected.")
 
 	flag.Parse()
 	cfg.RestartThreshold = int32(restartThreshold)

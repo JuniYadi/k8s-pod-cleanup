@@ -512,3 +512,293 @@ func TestCleanerRunDryRunAndExplicitNamespaces(t *testing.T) {
 		t.Errorf("expected pod to remain in dry-run mode, got err: %v", err)
 	}
 }
+
+func TestEvaluateNode(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	cfg := &config.Config{
+		NodePressureDuration: 1 * time.Minute,
+	}
+
+	cleaner := NewCleaner(fake.NewSimpleClientset(), cfg)
+	cleaner.SetNow(func() time.Time { return now })
+
+	tests := []struct {
+		name               string
+		node               *corev1.Node
+		expectedPressured  bool
+		expectedPressCount int
+	}{
+		{
+			name: "Healthy Node - No pressure",
+			node: &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{Name: "healthy-node"},
+				Status: corev1.NodeStatus{
+					Conditions: []corev1.NodeCondition{
+						{
+							Type:               corev1.NodeReady,
+							Status:             corev1.ConditionTrue,
+							LastTransitionTime: metav1.Time{Time: now.Add(-10 * time.Minute)},
+						},
+						{
+							Type:               corev1.NodeMemoryPressure,
+							Status:             corev1.ConditionFalse,
+							LastTransitionTime: metav1.Time{Time: now.Add(-10 * time.Minute)},
+						},
+					},
+				},
+			},
+			expectedPressured:  false,
+			expectedPressCount: 0,
+		},
+		{
+			name: "MemoryPressure active for 30s (< 1m threshold)",
+			node: &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{Name: "brief-pressure-node"},
+				Status: corev1.NodeStatus{
+					Conditions: []corev1.NodeCondition{
+						{
+							Type:               corev1.NodeReady,
+							Status:             corev1.ConditionTrue,
+							LastTransitionTime: metav1.Time{Time: now.Add(-10 * time.Minute)},
+						},
+						{
+							Type:               corev1.NodeMemoryPressure,
+							Status:             corev1.ConditionTrue,
+							LastTransitionTime: metav1.Time{Time: now.Add(-30 * time.Second)},
+						},
+					},
+				},
+			},
+			expectedPressured:  false,
+			expectedPressCount: 0,
+		},
+		{
+			name: "MemoryPressure active for 2m (>= 1m threshold)",
+			node: &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{Name: "mem-pressured-node"},
+				Status: corev1.NodeStatus{
+					Conditions: []corev1.NodeCondition{
+						{
+							Type:               corev1.NodeReady,
+							Status:             corev1.ConditionTrue,
+							LastTransitionTime: metav1.Time{Time: now.Add(-10 * time.Minute)},
+						},
+						{
+							Type:               corev1.NodeMemoryPressure,
+							Status:             corev1.ConditionTrue,
+							LastTransitionTime: metav1.Time{Time: now.Add(-2 * time.Minute)},
+						},
+					},
+				},
+			},
+			expectedPressured:  true,
+			expectedPressCount: 1,
+		},
+		{
+			name: "Node NotReady for 5m",
+			node: &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{Name: "not-ready-node"},
+				Status: corev1.NodeStatus{
+					Conditions: []corev1.NodeCondition{
+						{
+							Type:               corev1.NodeReady,
+							Status:             corev1.ConditionFalse,
+							LastTransitionTime: metav1.Time{Time: now.Add(-5 * time.Minute)},
+						},
+					},
+				},
+			},
+			expectedPressured:  true,
+			expectedPressCount: 1,
+		},
+		{
+			name: "Multiple pressures: DiskPressure and PIDPressure for > 1m",
+			node: &corev1.Node{
+				ObjectMeta: metav1.ObjectMeta{Name: "multi-pressure-node"},
+				Status: corev1.NodeStatus{
+					Conditions: []corev1.NodeCondition{
+						{
+							Type:               corev1.NodeDiskPressure,
+							Status:             corev1.ConditionTrue,
+							LastTransitionTime: metav1.Time{Time: now.Add(-3 * time.Minute)},
+						},
+						{
+							Type:               corev1.NodePIDPressure,
+							Status:             corev1.ConditionTrue,
+							LastTransitionTime: metav1.Time{Time: now.Add(-2 * time.Minute)},
+						},
+					},
+				},
+			},
+			expectedPressured:  true,
+			expectedPressCount: 2,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			isPressured, pressures, _ := cleaner.EvaluateNode(tc.node)
+			if isPressured != tc.expectedPressured {
+				t.Errorf("expected isPressured %v, got %v", tc.expectedPressured, isPressured)
+			}
+			if len(pressures) != tc.expectedPressCount {
+				t.Errorf("expected %d pressures, got %d (%v)", tc.expectedPressCount, len(pressures), pressures)
+			}
+		})
+	}
+}
+
+func TestEvacuateHighPressureNodes(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	cfg := &config.Config{
+		EnableNodePressureEviction: true,
+		NodePressureDuration:       1 * time.Minute,
+		NodePressureForceDelete:    true,
+		NodePressureCordon:         true,
+		IgnoreAnnotation:           "cleanup.k8s.io/ignore",
+		ExcludedNamespaces:         []string{"kube-system"},
+	}
+
+	pressuredNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "pressured-node"},
+		Spec:       corev1.NodeSpec{Unschedulable: false},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{
+				{
+					Type:               corev1.NodeMemoryPressure,
+					Status:             corev1.ConditionTrue,
+					LastTransitionTime: metav1.Time{Time: now.Add(-2 * time.Minute)},
+				},
+			},
+		},
+	}
+
+	healthyNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "healthy-node"},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{
+				{
+					Type:               corev1.NodeReady,
+					Status:             corev1.ConditionTrue,
+					LastTransitionTime: metav1.Time{Time: now.Add(-10 * time.Minute)},
+				},
+			},
+		},
+	}
+
+	podOnPressuredNode := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "app-pod",
+			Namespace: "default",
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "pressured-node",
+		},
+	}
+
+	podOnHealthyNode := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "healthy-app-pod",
+			Namespace: "default",
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "healthy-node",
+		},
+	}
+
+	daemonSetPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "ds-pod",
+			Namespace: "default",
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					Kind: "DaemonSet",
+					Name: "logging-agent",
+				},
+			},
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "pressured-node",
+		},
+	}
+
+	optedOutPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "opted-out-pod",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"cleanup.k8s.io/ignore": "true",
+			},
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "pressured-node",
+		},
+	}
+
+	systemPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "coredns-pod",
+			Namespace: "kube-system",
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "pressured-node",
+		},
+	}
+
+	client := fake.NewSimpleClientset(
+		pressuredNode,
+		healthyNode,
+		podOnPressuredNode,
+		podOnHealthyNode,
+		daemonSetPod,
+		optedOutPod,
+		systemPod,
+	)
+
+	cleaner := NewCleaner(client, cfg)
+	cleaner.SetNow(func() time.Time { return now })
+
+	err := cleaner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error during run: %v", err)
+	}
+
+	// 1. Node should be cordoned (Unschedulable = true)
+	updatedNode, err := client.CoreV1().Nodes().Get(context.Background(), "pressured-node", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("failed to get pressured node: %v", err)
+	}
+	if !updatedNode.Spec.Unschedulable {
+		t.Errorf("expected pressured node to be cordoned (Unschedulable=true)")
+	}
+
+	// 2. App pod on pressured node should be deleted
+	_, err = client.CoreV1().Pods("default").Get(context.Background(), "app-pod", metav1.GetOptions{})
+	if err == nil {
+		t.Errorf("expected app-pod on pressured node to be deleted")
+	}
+
+	// 3. Healthy pod on healthy node should remain
+	_, err = client.CoreV1().Pods("default").Get(context.Background(), "healthy-app-pod", metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("expected healthy-app-pod to remain, got err: %v", err)
+	}
+
+	// 4. DaemonSet pod on pressured node should remain
+	_, err = client.CoreV1().Pods("default").Get(context.Background(), "ds-pod", metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("expected ds-pod (DaemonSet) to remain, got err: %v", err)
+	}
+
+	// 5. Opted-out pod on pressured node should remain
+	_, err = client.CoreV1().Pods("default").Get(context.Background(), "opted-out-pod", metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("expected opted-out-pod to remain, got err: %v", err)
+	}
+
+	// 6. System pod in kube-system should remain
+	_, err = client.CoreV1().Pods("kube-system").Get(context.Background(), "coredns-pod", metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("expected coredns-pod in kube-system to remain, got err: %v", err)
+	}
+}
