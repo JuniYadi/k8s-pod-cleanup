@@ -125,3 +125,76 @@ func TestMainSuccess(t *testing.T) {
 		t.Errorf("expected exit code 1 on config error, got %d", exitCode)
 	}
 }
+
+func TestRunFlagParseError(t *testing.T) {
+	origArgs := os.Args
+	os.Args = []string{"cleaner", "--threshold-duration=invalid-duration"}
+	defer func() {
+		os.Args = origArgs
+	}()
+	err := run()
+	if err == nil {
+		t.Errorf("expected error from run() with invalid flag, got nil")
+	}
+}
+
+func TestGetKubernetesConfigInvalidFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	invalidKubeconfigPath := filepath.Join(tmpDir, "invalid-kubeconfig")
+	if err := os.WriteFile(invalidKubeconfigPath, []byte("invalid: [yaml: broken"), 0600); err != nil {
+		t.Fatalf("failed to write invalid kubeconfig: %v", err)
+	}
+
+	_, err := getKubernetesConfig(invalidKubeconfigPath)
+	if err == nil {
+		t.Errorf("expected error when loading invalid kubeconfig, got nil")
+	}
+}
+
+func TestMainAndRunSuccessWithMock(t *testing.T) {
+	tmpDir := t.TempDir()
+	kubeconfigPath := filepath.Join(tmpDir, "kubeconfig")
+	kubeconfigContent := `
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: https://127.0.0.1:6443
+  name: test-cluster
+contexts:
+- context:
+    cluster: test-cluster
+    user: test-user
+  name: test-context
+current-context: test-context
+users:
+- name: test-user
+  user:
+    token: dummy-token
+`
+	if err := os.WriteFile(kubeconfigPath, []byte(kubeconfigContent), 0600); err != nil {
+		t.Fatalf("failed to write dummy kubeconfig: %v", err)
+	}
+
+	os.Setenv("KUBECONFIG", kubeconfigPath)
+	os.Setenv("DRY_RUN", "true")
+	os.Setenv("NAMESPACES", "empty-ns")
+	defer func() {
+		os.Unsetenv("KUBECONFIG")
+		os.Unsetenv("DRY_RUN")
+		os.Unsetenv("NAMESPACES")
+	}()
+
+	var exitCode int
+	osExit = func(code int) {
+		exitCode = code
+	}
+	defer func() {
+		osExit = os.Exit
+	}()
+
+	main()
+	if exitCode != 0 {
+		t.Errorf("expected exit code 0 when execution finishes without fatal init error, got %d", exitCode)
+	}
+}
