@@ -802,3 +802,71 @@ func TestEvacuateHighPressureNodes(t *testing.T) {
 		t.Errorf("expected coredns-pod in kube-system to remain, got err: %v", err)
 	}
 }
+
+func TestEvacuateHighPressureNodesDryRun(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	cfg := &config.Config{
+		EnableNodePressureEviction: true,
+		NodePressureDuration:       1 * time.Minute,
+		NodePressureForceDelete:    false,
+		NodePressureCordon:         true,
+		DryRun:                     true,
+	}
+
+	pressuredNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "pressured-node-dryrun"},
+		Spec:       corev1.NodeSpec{Unschedulable: false},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{
+				{
+					Type:               corev1.NodeDiskPressure,
+					Status:             corev1.ConditionTrue,
+					LastTransitionTime: metav1.Time{Time: now.Add(-2 * time.Minute)},
+				},
+			},
+		},
+	}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "dryrun-pod",
+			Namespace: "default",
+		},
+		Spec: corev1.PodSpec{
+			NodeName: "pressured-node-dryrun",
+		},
+	}
+
+	client := fake.NewSimpleClientset(pressuredNode, pod)
+	cleaner := NewCleaner(client, cfg)
+	cleaner.SetNow(func() time.Time { return now })
+
+	err := cleaner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Node should NOT be modified in dry-run
+	node, _ := client.CoreV1().Nodes().Get(context.Background(), "pressured-node-dryrun", metav1.GetOptions{})
+	if node.Spec.Unschedulable {
+		t.Errorf("expected node to not be cordoned in dry-run")
+	}
+
+	// Pod should still exist in dry-run
+	_, err = client.CoreV1().Pods("default").Get(context.Background(), "dryrun-pod", metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("expected pod to remain in dry-run, got err: %v", err)
+	}
+}
+
+func TestIsCrashOrImageError(t *testing.T) {
+	errors := []string{"CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "CreateContainerConfigError", "CreateContainerError"}
+	for _, e := range errors {
+		if !isCrashOrImageError(e) {
+			t.Errorf("expected %s to be recognized as crash/image error", e)
+		}
+	}
+	if isCrashOrImageError("RandomOtherReason") {
+		t.Errorf("expected RandomOtherReason to not be recognized")
+	}
+}
