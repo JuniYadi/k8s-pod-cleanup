@@ -57,3 +57,45 @@ func TestConfigEnvOverrides(t *testing.T) {
 		t.Errorf("expected log level debug, got %s", cfg.LogLevel)
 	}
 }
+
+func TestConfigDefaultsAndHelpers(t *testing.T) {
+	// Test getEnvInt fallback
+	os.Setenv("RESTART_THRESHOLD_INVALID", "invalid-number")
+	defer os.Unsetenv("RESTART_THRESHOLD_INVALID")
+
+	val := getEnvInt("RESTART_THRESHOLD_INVALID", 99)
+	if val != 99 {
+		t.Errorf("expected fallback 99, got %d", val)
+	}
+
+	// Test getEnvBool cases
+	os.Setenv("TEST_BOOL_1", "1")
+	os.Setenv("TEST_BOOL_YES", "yes")
+	os.Setenv("TEST_BOOL_FALSE", "false")
+	defer func() {
+		os.Unsetenv("TEST_BOOL_1")
+		os.Unsetenv("TEST_BOOL_YES")
+		os.Unsetenv("TEST_BOOL_FALSE")
+	}()
+
+	if !getEnvBool("TEST_BOOL_1", false) {
+		t.Errorf("expected true for '1'")
+	}
+	if !getEnvBool("TEST_BOOL_YES", false) {
+		t.Errorf("expected true for 'yes'")
+	}
+	if getEnvBool("TEST_BOOL_FALSE", true) {
+		t.Errorf("expected false for 'false'")
+	}
+	if !getEnvBool("TEST_BOOL_NONEXISTENT", true) {
+		t.Errorf("expected default true for nonexistent key")
+	}
+
+	// Test getEnvDuration fallback on invalid
+	os.Setenv("TEST_DURATION_INVALID", "not-a-duration")
+	defer os.Unsetenv("TEST_DURATION_INVALID")
+	dur := getEnvDuration("TEST_DURATION_INVALID", 7*time.Minute)
+	if dur != 7*time.Minute {
+		t.Errorf("expected 7m, got %v", dur)
+	}
+}

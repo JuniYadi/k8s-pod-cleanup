@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/JuniYadi/k8s-pod-cleanup/actions/workflows/ci.yaml/badge.svg)](https://github.com/JuniYadi/k8s-pod-cleanup/actions/workflows/ci.yaml)
 [![Release](https://github.com/JuniYadi/k8s-pod-cleanup/actions/workflows/release.yaml/badge.svg)](https://github.com/JuniYadi/k8s-pod-cleanup/actions/workflows/release.yaml)
-[![codecov](https://codecov.io/gh/JuniYadi/k8s-pod-cleanup/graph/badge.svg?token=${{ secrets.CODECOV_TOKEN }})](https://codecov.io/gh/JuniYadi/k8s-pod-cleanup)
+[![codecov](https://codecov.io/gh/JuniYadi/k8s-pod-cleanup/graph/badge.svg?token=W72D5NQWJO)](https://codecov.io/gh/JuniYadi/k8s-pod-cleanup)
 
 A lightweight, automated Kubernetes CronJob written in Go that scans cluster namespaces and cleans up unhealthy or stuck Pods that waste cluster compute and IP resources.
 

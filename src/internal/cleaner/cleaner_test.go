@@ -74,6 +74,81 @@ func TestEvaluatePod(t *testing.T) {
 			shouldDelete: true,
 		},
 		{
+			name: "ImagePullBackOff Container",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "image-pull-pod",
+					Namespace:         "default",
+					CreationTimestamp: metav1.Time{Time: now.Add(-10 * time.Minute)},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodPending,
+					ContainerStatuses: []corev1.ContainerStatus{
+						{
+							Name:         "app",
+							RestartCount: 5,
+							State: corev1.ContainerState{
+								Waiting: &corev1.ContainerStateWaiting{
+									Reason: "ImagePullBackOff",
+								},
+							},
+						},
+					},
+				},
+			},
+			shouldDelete: true,
+		},
+		{
+			name: "CreateContainerConfigError Container",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "config-err-pod",
+					Namespace:         "default",
+					CreationTimestamp: metav1.Time{Time: now.Add(-10 * time.Minute)},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodPending,
+					ContainerStatuses: []corev1.ContainerStatus{
+						{
+							Name:         "app",
+							RestartCount: 5,
+							State: corev1.ContainerState{
+								Waiting: &corev1.ContainerStateWaiting{
+									Reason: "CreateContainerConfigError",
+								},
+							},
+						},
+					},
+				},
+			},
+			shouldDelete: true,
+		},
+		{
+			name: "CreateContainerError Container",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "create-err-pod",
+					Namespace:         "default",
+					CreationTimestamp: metav1.Time{Time: now.Add(-10 * time.Minute)},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodPending,
+					ContainerStatuses: []corev1.ContainerStatus{
+						{
+							Name:         "app",
+							RestartCount: 5,
+							State: corev1.ContainerState{
+								Waiting: &corev1.ContainerStateWaiting{
+									Reason: "CreateContainerError",
+								},
+							},
+						},
+					},
+				},
+			},
+			shouldDelete: true,
+		},
+		{
 			name: "CrashLoopBackOff Pod with Low Restarts (Below Threshold)",
 			pod: &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
@@ -150,6 +225,28 @@ func TestEvaluatePod(t *testing.T) {
 			shouldDelete: true,
 		},
 		{
+			name: "Running Unready Pod Fresh Transition (Within Threshold)",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "unready-fresh-pod",
+					Namespace:         "default",
+					CreationTimestamp: metav1.Time{Time: now.Add(-30 * time.Minute)},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{
+						{
+							Type:               corev1.PodReady,
+							Status:             corev1.ConditionFalse,
+							Reason:             "ContainersNotReady",
+							LastTransitionTime: metav1.Time{Time: now.Add(-1 * time.Minute)},
+						},
+					},
+				},
+			},
+			shouldDelete: false,
+		},
+		{
 			name: "Opted-out Pod with Annotation",
 			pod: &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
@@ -157,6 +254,24 @@ func TestEvaluatePod(t *testing.T) {
 					Namespace:         "default",
 					CreationTimestamp: metav1.Time{Time: now.Add(-30 * time.Minute)},
 					Annotations: map[string]string{
+						"cleanup.k8s.io/ignore": "true",
+					},
+				},
+				Status: corev1.PodStatus{
+					Phase:  corev1.PodFailed,
+					Reason: "Evicted",
+				},
+			},
+			shouldDelete: false,
+		},
+		{
+			name: "Opted-out Pod with Label",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "opted-out-label-pod",
+					Namespace:         "default",
+					CreationTimestamp: metav1.Time{Time: now.Add(-30 * time.Minute)},
+					Labels: map[string]string{
 						"cleanup.k8s.io/ignore": "true",
 					},
 				},
@@ -178,6 +293,74 @@ func TestEvaluatePod(t *testing.T) {
 				},
 				Status: corev1.PodStatus{
 					Phase: corev1.PodRunning,
+				},
+			},
+			shouldDelete: true,
+		},
+		{
+			name: "Terminating Pod within Grace Period",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "terminating-fresh-pod",
+					Namespace:         "default",
+					CreationTimestamp: metav1.Time{Time: now.Add(-30 * time.Minute)},
+					DeletionTimestamp: &metav1.Time{Time: now.Add(-1 * time.Minute)},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+				},
+			},
+			shouldDelete: false,
+		},
+		{
+			name: "Failed Pod within Threshold Duration",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "fresh-failed-pod",
+					Namespace:         "default",
+					CreationTimestamp: metav1.Time{Time: now.Add(-1 * time.Minute)},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodFailed,
+				},
+			},
+			shouldDelete: false,
+		},
+		{
+			name: "Pending Pod within Threshold Duration",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "fresh-pending-pod",
+					Namespace:         "default",
+					CreationTimestamp: metav1.Time{Time: now.Add(-1 * time.Minute)},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodPending,
+				},
+			},
+			shouldDelete: false,
+		},
+		{
+			name: "InitContainer Waiting with ErrImagePull",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "init-crash-pod",
+					Namespace:         "default",
+					CreationTimestamp: metav1.Time{Time: now.Add(-10 * time.Minute)},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodPending,
+					InitContainerStatuses: []corev1.ContainerStatus{
+						{
+							Name:         "init-app",
+							RestartCount: 4,
+							State: corev1.ContainerState{
+								Waiting: &corev1.ContainerStateWaiting{
+									Reason: "ErrImagePull",
+								},
+							},
+						},
+					},
 				},
 			},
 			shouldDelete: true,
@@ -250,5 +433,82 @@ func TestCleanerRun(t *testing.T) {
 	_, err = client.CoreV1().Pods("kube-system").Get(context.Background(), "system-bad-pod", metav1.GetOptions{})
 	if err != nil {
 		t.Errorf("expected system-bad-pod in kube-system to not be deleted, got err: %v", err)
+	}
+}
+
+func TestCleanerRunGracefulDelete(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	cfg := &config.Config{
+		ThresholdDuration: 5 * time.Minute,
+		DryRun:            false,
+		Force:             false, // Standard graceful deletion branch
+	}
+
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "bad-pod-graceful",
+				Namespace:         "default",
+				CreationTimestamp: metav1.Time{Time: now.Add(-10 * time.Minute)},
+			},
+			Status: corev1.PodStatus{
+				Phase:  corev1.PodFailed,
+				Reason: "Evicted",
+			},
+		},
+	)
+
+	cleaner := NewCleaner(client, cfg)
+	cleaner.SetNow(func() time.Time { return now })
+
+	err := cleaner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	_, err = client.CoreV1().Pods("default").Get(context.Background(), "bad-pod-graceful", metav1.GetOptions{})
+	if err == nil {
+		t.Errorf("expected pod to be deleted")
+	}
+}
+
+func TestCleanerRunDryRunAndExplicitNamespaces(t *testing.T) {
+	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
+	cfg := &config.Config{
+		ThresholdDuration:  5 * time.Minute,
+		RestartThreshold:   3,
+		DryRun:             true,
+		Namespaces:         []string{"target-ns", "kube-system"},
+		ExcludedNamespaces: []string{"kube-system"},
+	}
+
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "target-ns"}},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "bad-pod-in-target",
+				Namespace:         "target-ns",
+				CreationTimestamp: metav1.Time{Time: now.Add(-10 * time.Minute)},
+			},
+			Status: corev1.PodStatus{
+				Phase:  corev1.PodFailed,
+				Reason: "Evicted",
+			},
+		},
+	)
+
+	cleaner := NewCleaner(client, cfg)
+	cleaner.SetNow(func() time.Time { return now })
+
+	err := cleaner.Run(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Because DryRun is true, pod should still exist
+	_, err = client.CoreV1().Pods("target-ns").Get(context.Background(), "bad-pod-in-target", metav1.GetOptions{})
+	if err != nil {
+		t.Errorf("expected pod to remain in dry-run mode, got err: %v", err)
 	}
 }

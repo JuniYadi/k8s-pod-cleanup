@@ -13,36 +13,42 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
+var osExit = os.Exit
+
 func main() {
+	if err := run(); err != nil {
+		slog.Error("Application terminated with error", "error", err)
+		osExit(1)
+	}
+}
+
+func run() error {
 	cfg, err := config.ParseFlags()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to parse flags: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to parse flags: %w", err)
 	}
 
 	setupLogger(cfg.LogLevel)
 
 	k8sConfig, err := getKubernetesConfig(cfg.Kubeconfig)
 	if err != nil {
-		slog.Error("Failed to initialize Kubernetes client config", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to initialize Kubernetes client config: %w", err)
 	}
 
 	clientset, err := kubernetes.NewForConfig(k8sConfig)
 	if err != nil {
-		slog.Error("Failed to create Kubernetes clientset", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to create Kubernetes clientset: %w", err)
 	}
 
 	appCleaner := cleaner.NewCleaner(clientset, cfg)
 	ctx := context.Background()
 
 	if err := appCleaner.Run(ctx); err != nil {
-		slog.Error("Error executing pod cleanup", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("error executing pod cleanup: %w", err)
 	}
 
 	slog.Info("k8s-pod-cleanup execution finished successfully")
+	return nil
 }
 
 func setupLogger(levelStr string) {

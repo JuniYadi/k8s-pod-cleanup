@@ -259,7 +259,6 @@ func isCrashOrImageError(reason string) bool {
 	switch reason {
 	case "CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "CreateContainerConfigError", "CreateContainerError":
 		return true
-	default:
-		return false
 	}
+	return false
 }
