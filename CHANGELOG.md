@@ -14,8 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Opt-in Helm values under `metrics.*`, wired into both CronJobs, with credentials supplied via `metrics.pushgateway.auth.existingSecret`.
   - Each CronJob pushes under its own `component` grouping label (`pod-cleanup` / `node-pressure`), since both run the same binary and would otherwise overwrite each other's group.
 
+- **Grafana Dashboard & Scrape Guidance**:
+  - Added `example/grafana-dashboard.json`: eleven panels covering run health, pod cleanup by reason and namespace, and node pressure, with `component` and `namespace` template variables.
+  - Documented the required `honor_labels: true` on the Pushgateway scrape config, without which the pushed `job` label is renamed to `exported_job`.
+
 ### Changed
 - `Decision` gained a `Code` field and `EvaluateNode` now returns `Pressure` values carrying both a metrics code and a human-readable detail. The existing free-text reasons embed durations and container names, so they cannot be used as Prometheus label values without unbounded series growth.
+- Docker images are cross-compiled rather than built under QEMU emulation, cutting the multi-arch release build from 14m18s to 2m47s.
+
+### Fixed
+- Corrected the documented aggregation query. `sum_over_time()` over-counts Pushgateway gauges, because the same value is served on every scrape until the next push; a 5-minute job scraped every 15s was counted about 20 times over.
 
 ---
 
