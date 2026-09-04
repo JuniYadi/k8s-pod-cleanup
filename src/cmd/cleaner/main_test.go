@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/juniyadi/k8s-pod-cleanup/internal/config"
@@ -251,4 +252,45 @@ func TestPushMetricsSurvivesGatewayFailure(t *testing.T) {
 
 	cfg := &config.Config{PushgatewayURL: srv.URL, PushgatewayJob: "job"}
 	pushMetrics(context.Background(), metrics.NewRecorder(false), cfg)
+}
+
+// Run returns an error only when the namespace listing itself fails, which is
+// what surfaces a broken cluster connection rather than a per-namespace hiccup.
+func TestRunReturnsErrorWhenCleanupFails(t *testing.T) {
+	tmpDir := t.TempDir()
+	kubeconfigPath := filepath.Join(tmpDir, "kubeconfig")
+	kubeconfigContent := `
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: https://127.0.0.1:1
+  name: test-cluster
+contexts:
+- context:
+    cluster: test-cluster
+    user: test-user
+  name: test-context
+current-context: test-context
+users:
+- name: test-user
+  user:
+    token: dummy-token
+`
+	if err := os.WriteFile(kubeconfigPath, []byte(kubeconfigContent), 0600); err != nil {
+		t.Fatalf("failed to write dummy kubeconfig: %v", err)
+	}
+
+	t.Setenv("KUBECONFIG", kubeconfigPath)
+	t.Setenv("DRY_RUN", "true")
+	// No NAMESPACES: the cleaner must list namespaces itself, and that call fails.
+	os.Unsetenv("NAMESPACES")
+
+	err := run()
+	if err == nil {
+		t.Fatal("expected run to return an error when namespace listing fails")
+	}
+	if !strings.Contains(err.Error(), "error executing pod cleanup") {
+		t.Errorf("expected wrapped cleanup error, got %v", err)
+	}
 }
