@@ -1,5 +1,10 @@
-# Build stage
-FROM golang:1.26-alpine AS builder
+# Build stage.
+#
+# Pinned to the *builder's* architecture, not the target's. The binary is
+# CGO-free, so Go cross-compiles it directly: the arm64 image is produced
+# natively on an amd64 runner instead of running the whole Go toolchain under
+# QEMU emulation, which took ~10 minutes per release.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
@@ -10,8 +15,9 @@ RUN go mod download
 # Copy source code
 COPY src/ ./
 
-# Build statically linked binary
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /app/bin/k8s-pod-cleanup ./cmd/cleaner
+# Build statically linked binary for the requested target architecture.
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -ldflags="-w -s" -o /app/bin/k8s-pod-cleanup ./cmd/cleaner
 
 # Minimal runtime stage
 FROM gcr.io/distroless/static-debian12:nonroot
