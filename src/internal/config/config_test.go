@@ -123,3 +123,74 @@ func TestConfigDefaultsAndHelpers(t *testing.T) {
 		t.Errorf("expected 7m, got %v", dur)
 	}
 }
+
+// Both CronJobs run the same binary, so the component is what keeps their
+// Pushgateway groups apart. Getting this wrong means one job silently
+// overwrites the other's metrics.
+func TestMetricsComponent(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *Config
+		want string
+	}{
+		{"node pressure job", &Config{EnableNodePressureEviction: true}, "node-pressure"},
+		{"pod cleanup job", &Config{EnableNodePressureEviction: false}, "pod-cleanup"},
+		{"zero value defaults to pod cleanup", &Config{}, "pod-cleanup"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cfg.MetricsComponent(); got != tc.want {
+				t.Errorf("expected %q, got %q", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestMetricsComponentFromParsedFlags(t *testing.T) {
+	cfg, err := ParseFlagsWithArgs([]string{"--enable-node-pressure-eviction=true"})
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	if got := cfg.MetricsComponent(); got != "node-pressure" {
+		t.Errorf("expected node-pressure, got %q", got)
+	}
+}
+
+func TestPushgatewayFlagsAndCredentials(t *testing.T) {
+	t.Setenv("PUSHGATEWAY_USERNAME", "metrics")
+	t.Setenv("PUSHGATEWAY_PASSWORD", "secret")
+
+	cfg, err := ParseFlagsWithArgs([]string{
+		"--pushgateway-url=http://pgw:9091",
+		"--pushgateway-job=custom-job",
+	})
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+
+	if cfg.PushgatewayURL != "http://pgw:9091" {
+		t.Errorf("expected url http://pgw:9091, got %q", cfg.PushgatewayURL)
+	}
+	if cfg.PushgatewayJob != "custom-job" {
+		t.Errorf("expected job custom-job, got %q", cfg.PushgatewayJob)
+	}
+	// Credentials are env-only: a flag would expose them in the pod spec.
+	if cfg.PushgatewayUsername != "metrics" || cfg.PushgatewayPassword != "secret" {
+		t.Errorf("expected credentials from env, got %q/%q", cfg.PushgatewayUsername, cfg.PushgatewayPassword)
+	}
+}
+
+func TestPushgatewayDefaults(t *testing.T) {
+	cfg, err := ParseFlagsWithArgs(nil)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+	// An empty URL is what disables the push entirely.
+	if cfg.PushgatewayURL != "" {
+		t.Errorf("expected empty default url, got %q", cfg.PushgatewayURL)
+	}
+	if cfg.PushgatewayJob != "k8s-pod-cleanup" {
+		t.Errorf("expected default job k8s-pod-cleanup, got %q", cfg.PushgatewayJob)
+	}
+}

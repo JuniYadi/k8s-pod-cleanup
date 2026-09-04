@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
+
 func TestEvaluatePod(t *testing.T) {
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
 	cfg := &config.Config{
@@ -1108,5 +1109,12 @@ func TestEvacuateHighPressureNodesErrors(t *testing.T) {
 	err = cleaner2.EvacuateHighPressureNodes(context.Background())
 	if err != nil {
 		t.Errorf("expected nil error (graceful logging), got: %v", err)
+	}
+}
+
+func TestNewCleanerProvidesMetricsRecorder(t *testing.T) {
+	c := NewCleaner(fake.NewSimpleClientset(), &config.Config{})
+	if c.Metrics() == nil {
+		t.Fatal("expected NewCleaner to initialise a metrics recorder")
 	}
 }

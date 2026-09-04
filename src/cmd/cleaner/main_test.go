@@ -1,10 +1,17 @@
 package main
 
 import (
+	"context"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/juniyadi/k8s-pod-cleanup/internal/config"
+	"github.com/juniyadi/k8s-pod-cleanup/internal/metrics"
 )
 
 func TestSetupLogger(t *testing.T) {
@@ -196,5 +203,94 @@ users:
 	main()
 	if exitCode != 0 {
 		t.Errorf("expected exit code 0 when execution finishes without fatal init error, got %d", exitCode)
+	}
+}
+
+func TestPushMetricsSkipsWhenNoURLConfigured(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+	}))
+	defer srv.Close()
+
+	recorder := metrics.NewRecorder(false)
+	pushMetrics(context.Background(), recorder, &config.Config{})
+
+	if hits != 0 {
+		t.Errorf("expected no push without a configured URL, got %d requests", hits)
+	}
+}
+
+func TestPushMetricsSendsToConfiguredGateway(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		PushgatewayURL:             srv.URL,
+		PushgatewayJob:             "k8s-pod-cleanup",
+		EnableNodePressureEviction: true,
+	}
+	pushMetrics(context.Background(), metrics.NewRecorder(false), cfg)
+
+	want := "/metrics/job/k8s-pod-cleanup/component/node-pressure"
+	if gotPath != want {
+		t.Errorf("expected path %q, got %q", want, gotPath)
+	}
+}
+
+// A failing Pushgateway must not take the run down with it: the cleanup already
+// happened, and a non-zero exit would make the CronJob retry deletions.
+func TestPushMetricsSurvivesGatewayFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{PushgatewayURL: srv.URL, PushgatewayJob: "job"}
+	pushMetrics(context.Background(), metrics.NewRecorder(false), cfg)
+}
+
+// Run returns an error only when the namespace listing itself fails, which is
+// what surfaces a broken cluster connection rather than a per-namespace hiccup.
+func TestRunReturnsErrorWhenCleanupFails(t *testing.T) {
+	tmpDir := t.TempDir()
+	kubeconfigPath := filepath.Join(tmpDir, "kubeconfig")
+	kubeconfigContent := `
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    server: https://127.0.0.1:1
+  name: test-cluster
+contexts:
+- context:
+    cluster: test-cluster
+    user: test-user
+  name: test-context
+current-context: test-context
+users:
+- name: test-user
+  user:
+    token: dummy-token
+`
+	if err := os.WriteFile(kubeconfigPath, []byte(kubeconfigContent), 0600); err != nil {
+		t.Fatalf("failed to write dummy kubeconfig: %v", err)
+	}
+
+	t.Setenv("KUBECONFIG", kubeconfigPath)
+	t.Setenv("DRY_RUN", "true")
+	// No NAMESPACES: the cleaner must list namespaces itself, and that call fails.
+	os.Unsetenv("NAMESPACES")
+
+	err := run()
+	if err == nil {
+		t.Fatal("expected run to return an error when namespace listing fails")
+	}
+	if !strings.Contains(err.Error(), "error executing pod cleanup") {
+		t.Errorf("expected wrapped cleanup error, got %v", err)
 	}
 }

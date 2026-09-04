@@ -52,6 +52,15 @@ spec:
                 {{- if .Values.cleanup.excludedNamespaces }}
                 - --excluded-namespaces={{ .Values.cleanup.excludedNamespaces | join "," }}
                 {{- end }}
+                {{- if .Values.metrics.enabled }}
+                - --pushgateway-url={{ required "metrics.pushgateway.url is required when metrics.enabled is true" .Values.metrics.pushgateway.url }}
+                - --pushgateway-job={{ .Values.metrics.pushgateway.jobName }}
+                {{- end }}
+              {{- if and .Values.metrics.enabled .Values.metrics.pushgateway.auth.existingSecret }}
+              envFrom:
+                - secretRef:
+                    name: {{ .Values.metrics.pushgateway.auth.existingSecret }}
+              {{- end }}
               resources:
                 {{- toYaml (default .Values.resources .Values.nodePressureEviction.resources) | nindent 16 }}
           {{- with .Values.nodeSelector }}

@@ -20,6 +20,7 @@ A lightweight, automated Kubernetes CronJob written in Go that scans cluster nam
   - Pod opt-out via annotation/label `cleanup.k8s.io/ignore: "true"`.
 - **Dry-Run Mode**: Full simulation logging with structured JSON (`log/slog`) before performing actual deletions.
 - **Graceful or Force Deletion**: Choose between standard graceful termination or immediate force deletion (`--force`).
+- **Prometheus Metrics**: Optionally pushes per-run metrics (pods evaluated/deleted by namespace and reason, nodes pressured/cordoned, run duration and outcome) to a Prometheus Pushgateway at the end of every run.
 
 ---
 
@@ -158,6 +159,71 @@ spec:
 | `nodePressureEviction.pressureDuration`  | Sustained node pressure duration threshold             | `"1m"`                                        |
 | `nodePressureEviction.forceDelete`       | Force delete pods (gracePeriodSeconds=0) on bad nodes  | `true`                                        |
 | `nodePressureEviction.cordon`            | Mark pressured node unschedulable                      | `true`                                        |
+| `metrics.enabled`                        | Push run metrics to a Prometheus Pushgateway           | `false`                                       |
+| `metrics.pushgateway.url`                | Pushgateway base URL                                   | `"http://prometheus-pushgateway.monitoring.svc:9091"` |
+| `metrics.pushgateway.jobName`            | Prometheus job name used as the grouping key           | `"k8s-pod-cleanup"`                           |
+| `metrics.pushgateway.auth.existingSecret`| Secret with `PUSHGATEWAY_USERNAME` / `PUSHGATEWAY_PASSWORD` | `""`                                     |
+
+---
+
+## 📊 Prometheus Metrics
+
+A CronJob pod exits long before Prometheus could scrape it, so metrics are pushed to a [Pushgateway](https://github.com/prometheus/pushgateway) at the end of each run instead.
+
+```bash
+helm upgrade --install k8s-pod-cleanup oci://ghcr.io/juniyadi/charts/k8s-pod-cleanup \
+  --namespace kube-system \
+  --set metrics.enabled=true \
+  --set metrics.pushgateway.url=http://prometheus-pushgateway.monitoring.svc:9091
+```
+
+If your Pushgateway requires basic auth, create a Secret and reference it. Credentials are passed as environment variables, never as container args, so they do not show up in the pod spec:
+
+```bash
+kubectl create secret generic pushgateway-creds -n kube-system \
+  --from-literal=PUSHGATEWAY_USERNAME=metrics \
+  --from-literal=PUSHGATEWAY_PASSWORD='...'
+
+helm upgrade --install ... --set metrics.pushgateway.auth.existingSecret=pushgateway-creds
+```
+
+### Exposed Metrics
+
+Both CronJobs run the same binary, so each pushes under its own `component` grouping label (`pod-cleanup` or `node-pressure`) to avoid overwriting the other's group.
+
+| Metric | Labels | Description |
+| :----- | :----- | :---------- |
+| `k8s_pod_cleanup_pods_evaluated`             | —                   | Pods checked against the cleanup rules |
+| `k8s_pod_cleanup_pods_deleted`               | `namespace`, `reason` | Pods deleted (or, in dry-run, that would have been) |
+| `k8s_pod_cleanup_pod_delete_errors`          | `namespace`         | Deletion attempts that failed |
+| `k8s_pod_cleanup_nodes_evaluated`            | —                   | Nodes checked for sustained pressure |
+| `k8s_pod_cleanup_nodes_pressured`            | —                   | Nodes found under sustained pressure |
+| `k8s_pod_cleanup_node_pressure_conditions`   | `condition`         | Active pressure conditions by type |
+| `k8s_pod_cleanup_nodes_cordoned`             | —                   | Nodes marked unschedulable |
+| `k8s_pod_cleanup_pods_evacuated`             | `namespace`         | Pods removed from pressured nodes |
+| `k8s_pod_cleanup_duration_seconds`           | —                   | Wall-clock duration of the run |
+| `k8s_pod_cleanup_last_run_timestamp_seconds` | —                   | When the run finished |
+| `k8s_pod_cleanup_run_success`                | —                   | `1` if the run completed without error |
+| `k8s_pod_cleanup_dry_run`                    | —                   | `1` if the run was a dry run |
+
+`reason` is one of `terminating_stuck`, `failed_or_evicted`, `pending_stalled`, `crashloop_or_image_error`, `unready`. `condition` is one of `memory_pressure`, `disk_pressure`, `pid_pressure`, `not_ready`.
+
+### Querying
+
+Every metric is a **Gauge describing a single run**, not a Counter. Each run reports only its own work and replaces the previous group in the Pushgateway, so a value going from `5` to `2` is a normal observation rather than a counter reset — `rate()` and `increase()` would produce nonsense here. Aggregate across runs with `sum_over_time()`:
+
+```promql
+# Pods deleted in the last hour, by reason
+sum by (reason) (sum_over_time(k8s_pod_cleanup_pods_deleted[1h]))
+
+# Alert: cleanup has not reported in 30 minutes
+time() - k8s_pod_cleanup_last_run_timestamp_seconds > 1800
+
+# Alert: last run failed
+k8s_pod_cleanup_run_success == 0
+```
+
+A push failure is logged but never fails the run — the cleanup itself already happened, and exiting non-zero would make the CronJob retry deletions to fix a monitoring problem. Alert on `k8s_pod_cleanup_last_run_timestamp_seconds` going stale to catch that case.
 
 ---
 

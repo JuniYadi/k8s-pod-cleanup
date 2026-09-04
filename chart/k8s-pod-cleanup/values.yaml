@@ -76,6 +76,26 @@ nodePressureEviction:
   failedJobsHistoryLimit: 3
   # Custom resources for node pressure job container if different from default
   resources: {}
+# Prometheus metrics, pushed to a Pushgateway at the end of every run.
+# A CronJob pod exits long before Prometheus could scrape it, so push is the
+# only option short of turning this into a long-running controller.
+metrics:
+  enabled: false
+  pushgateway:
+    # Base URL of the Pushgateway. Required when metrics.enabled is true.
+    url: "http://prometheus-pushgateway.monitoring.svc:9091"
+    # Prometheus job name, used as the grouping key. Each CronJob additionally
+    # pushes under its own "component" label (pod-cleanup / node-pressure), so
+    # the two do not overwrite each other.
+    jobName: "k8s-pod-cleanup"
+    auth:
+      # Name of an existing Secret holding PUSHGATEWAY_USERNAME and
+      # PUSHGATEWAY_PASSWORD keys. Left empty, no credentials are sent.
+      # Credentials are deliberately not inline values: values.yaml usually
+      # ends up in Git, and container args are readable by anyone who can read
+      # the pod spec.
+      existingSecret: ""
+
 podAnnotations: {}
 podLabels: {}
 

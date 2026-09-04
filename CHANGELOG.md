@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Prometheus Metrics via Pushgateway** ([#1](https://github.com/JuniYadi/k8s-pod-cleanup/issues/1)):
+  - Per-run metrics pushed to a Prometheus Pushgateway at the end of each run: pods evaluated, pods deleted by namespace and reason, deletion errors, nodes evaluated/pressured/cordoned, pods evacuated, run duration, last run timestamp, run outcome, and dry-run state.
+  - New flags `--pushgateway-url` and `--pushgateway-job`; basic auth credentials read from `PUSHGATEWAY_USERNAME` / `PUSHGATEWAY_PASSWORD` only, so they never appear in the pod spec.
+  - Opt-in Helm values under `metrics.*`, wired into both CronJobs, with credentials supplied via `metrics.pushgateway.auth.existingSecret`.
+  - Each CronJob pushes under its own `component` grouping label (`pod-cleanup` / `node-pressure`), since both run the same binary and would otherwise overwrite each other's group.
+
+### Changed
+- `Decision` gained a `Code` field and `EvaluateNode` now returns `Pressure` values carrying both a metrics code and a human-readable detail. The existing free-text reasons embed durations and container names, so they cannot be used as Prometheus label values without unbounded series growth.
+
+---
+
 ## [v0.2.0] - 2026-09-04
 
 ### Added
