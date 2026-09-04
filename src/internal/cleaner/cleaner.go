@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/juniyadi/k8s-pod-cleanup/internal/config"
+	"github.com/juniyadi/k8s-pod-cleanup/internal/metrics"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -17,23 +18,33 @@ import (
 type Decision struct {
 	ShouldDelete bool
 	Reason       string
-	Age          time.Duration
+	// Code is the low-cardinality metrics label for Reason. Reason itself
+	// embeds durations and container names, so it can never be a label value.
+	Code string
+	Age  time.Duration
 }
 
 // Cleaner handles pod discovery, evaluation, and deletion.
 type Cleaner struct {
-	client kubernetes.Interface
-	cfg    *config.Config
-	now    func() time.Time
+	client  kubernetes.Interface
+	cfg     *config.Config
+	now     func() time.Time
+	metrics *metrics.Recorder
 }
 
 // NewCleaner creates a new Cleaner instance.
 func NewCleaner(client kubernetes.Interface, cfg *config.Config) *Cleaner {
 	return &Cleaner{
-		client: client,
-		cfg:    cfg,
-		now:    time.Now,
+		client:  client,
+		cfg:     cfg,
+		now:     time.Now,
+		metrics: metrics.NewRecorder(cfg.DryRun),
 	}
+}
+
+// Metrics returns the recorder holding this run's measurements.
+func (c *Cleaner) Metrics() *metrics.Recorder {
+	return c.metrics
 }
 
 // SetNow allows injecting current time for deterministic testing.
@@ -89,6 +100,7 @@ func (c *Cleaner) Run(ctx context.Context) error {
 		for i := range pods.Items {
 			pod := &pods.Items[i]
 			totalEvaluated++
+			c.metrics.AddPodEvaluated()
 
 			decision := c.EvaluatePod(pod)
 			if !decision.ShouldDelete {
@@ -105,6 +117,7 @@ func (c *Cleaner) Run(ctx context.Context) error {
 
 			if c.cfg.DryRun {
 				totalDeleted++
+				c.metrics.AddPodDeleted(pod.Namespace, decision.Code)
 				continue
 			}
 
@@ -115,6 +128,7 @@ func (c *Cleaner) Run(ctx context.Context) error {
 			}
 
 			if err := c.client.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, deleteOpts); err != nil {
+				c.metrics.AddPodDeleteError(pod.Namespace)
 				slog.Error("Failed to delete pod",
 					"namespace", pod.Namespace,
 					"pod", pod.Name,
@@ -122,6 +136,7 @@ func (c *Cleaner) Run(ctx context.Context) error {
 				)
 			} else {
 				totalDeleted++
+				c.metrics.AddPodDeleted(pod.Namespace, decision.Code)
 				slog.Info("Successfully deleted pod",
 					"namespace", pod.Namespace,
 					"pod", pod.Name,
@@ -165,6 +180,7 @@ func (c *Cleaner) EvaluatePod(pod *corev1.Pod) Decision {
 			return Decision{
 				ShouldDelete: true,
 				Reason:       fmt.Sprintf("Stuck in Terminating state for %s", terminatingDuration.Round(time.Second)),
+				Code:         metrics.ReasonTerminatingStuck,
 				Age:          terminatingDuration,
 			}
 		}
@@ -179,6 +195,7 @@ func (c *Cleaner) EvaluatePod(pod *corev1.Pod) Decision {
 			return Decision{
 				ShouldDelete: true,
 				Reason:       fmt.Sprintf("Phase is %s (Reason: %s) older than threshold", pod.Status.Phase, pod.Status.Reason),
+				Code:         metrics.ReasonFailedOrEvicted,
 				Age:          podAge,
 			}
 		}
@@ -191,6 +208,7 @@ func (c *Cleaner) EvaluatePod(pod *corev1.Pod) Decision {
 			return Decision{
 				ShouldDelete: true,
 				Reason:       fmt.Sprintf("Pending phase stuck for %s", podAge.Round(time.Second)),
+				Code:         metrics.ReasonPendingStalled,
 				Age:          podAge,
 			}
 		}
@@ -206,6 +224,7 @@ func (c *Cleaner) EvaluatePod(pod *corev1.Pod) Decision {
 					return Decision{
 						ShouldDelete: true,
 						Reason:       fmt.Sprintf("Container %s waiting with %s (restarts: %d)", cs.Name, reason, cs.RestartCount),
+						Code:         metrics.ReasonCrashOrImage,
 						Age:          podAge,
 					}
 				}
@@ -221,6 +240,7 @@ func (c *Cleaner) EvaluatePod(pod *corev1.Pod) Decision {
 					return Decision{
 						ShouldDelete: true,
 						Reason:       fmt.Sprintf("InitContainer %s waiting with %s (restarts: %d)", ics.Name, reason, ics.RestartCount),
+						Code:         metrics.ReasonCrashOrImage,
 						Age:          podAge,
 					}
 				}
@@ -237,6 +257,7 @@ func (c *Cleaner) EvaluatePod(pod *corev1.Pod) Decision {
 					return Decision{
 						ShouldDelete: true,
 						Reason:       fmt.Sprintf("Running but unready for %s (Reason: %s)", unreadyDuration.Round(time.Second), cond.Reason),
+						Code:         metrics.ReasonUnready,
 						Age:          unreadyDuration,
 					}
 				}
@@ -271,17 +292,33 @@ func isCrashOrImageError(reason string) bool {
 
 // NodePressureInfo contains details of a node under sustained resource pressure.
 type NodePressureInfo struct {
-	NodeName       string
-	Conditions     []string
-	PressureSince  time.Time
-	Duration       time.Duration
+	NodeName      string
+	Conditions    []string
+	PressureSince time.Time
+	Duration      time.Duration
+}
+
+// Pressure is one active sustained pressure condition on a node.
+type Pressure struct {
+	// Code is the low-cardinality metrics label (e.g. "memory_pressure").
+	Code string
+	// Detail is the human-readable form, including how long it has been active.
+	Detail string
+}
+
+// pressureCodes maps Kubernetes node condition types to their metrics labels.
+var pressureCodes = map[corev1.NodeConditionType]string{
+	corev1.NodeMemoryPressure: metrics.ConditionMemoryPressure,
+	corev1.NodeDiskPressure:   metrics.ConditionDiskPressure,
+	corev1.NodePIDPressure:    metrics.ConditionPIDPressure,
 }
 
 // EvaluateNode checks if a node is experiencing sustained pressure beyond configured duration.
-func (c *Cleaner) EvaluateNode(node *corev1.Node) (bool, []string, time.Duration) {
-	var activePressures []string
+func (c *Cleaner) EvaluateNode(node *corev1.Node) (bool, []Pressure, time.Duration) {
+	var activePressures []Pressure
 	var longestDuration time.Duration
 
+	// Iterated as a slice, not over pressureCodes, to keep the reported order stable.
 	pressureConditionTypes := []corev1.NodeConditionType{
 		corev1.NodeMemoryPressure,
 		corev1.NodeDiskPressure,
@@ -296,7 +333,10 @@ func (c *Cleaner) EvaluateNode(node *corev1.Node) (bool, []string, time.Duration
 			if cond.Type == pt && cond.Status == corev1.ConditionTrue {
 				duration := now.Sub(cond.LastTransitionTime.Time)
 				if duration >= c.cfg.NodePressureDuration {
-					activePressures = append(activePressures, fmt.Sprintf("%s(active for %s)", cond.Type, duration.Round(time.Second)))
+					activePressures = append(activePressures, Pressure{
+						Code:   pressureCodes[pt],
+						Detail: fmt.Sprintf("%s(active for %s)", cond.Type, duration.Round(time.Second)),
+					})
 					if duration > longestDuration {
 						longestDuration = duration
 					}
@@ -308,7 +348,10 @@ func (c *Cleaner) EvaluateNode(node *corev1.Node) (bool, []string, time.Duration
 		if cond.Type == corev1.NodeReady && cond.Status != corev1.ConditionTrue {
 			duration := now.Sub(cond.LastTransitionTime.Time)
 			if duration >= c.cfg.NodePressureDuration {
-				activePressures = append(activePressures, fmt.Sprintf("NodeNotReady[status=%s](active for %s)", cond.Status, duration.Round(time.Second)))
+				activePressures = append(activePressures, Pressure{
+					Code:   metrics.ConditionNotReady,
+					Detail: fmt.Sprintf("NodeNotReady[status=%s](active for %s)", cond.Status, duration.Round(time.Second)),
+				})
 				if duration > longestDuration {
 					longestDuration = duration
 				}
@@ -317,6 +360,24 @@ func (c *Cleaner) EvaluateNode(node *corev1.Node) (bool, []string, time.Duration
 	}
 
 	return len(activePressures) > 0, activePressures, longestDuration
+}
+
+// pressureDetails renders pressures for log output.
+func pressureDetails(pressures []Pressure) string {
+	details := make([]string, 0, len(pressures))
+	for _, p := range pressures {
+		details = append(details, p.Detail)
+	}
+	return strings.Join(details, ", ")
+}
+
+// pressureCodeList extracts the metrics labels from pressures.
+func pressureCodeList(pressures []Pressure) []string {
+	codes := make([]string, 0, len(pressures))
+	for _, p := range pressures {
+		codes = append(codes, p.Code)
+	}
+	return codes
 }
 
 // EvacuateHighPressureNodes discovers nodes under sustained pressure, cordons them, and cleans up pods.
@@ -337,15 +398,17 @@ func (c *Cleaner) EvacuateHighPressureNodes(ctx context.Context) error {
 
 	for i := range nodes.Items {
 		node := &nodes.Items[i]
+		c.metrics.AddNodeEvaluated()
 		isPressured, pressures, maxDuration := c.EvaluateNode(node)
 		if !isPressured {
 			continue
 		}
 
 		pressuredNodesCount++
+		c.metrics.AddNodePressured(pressureCodeList(pressures))
 		slog.Warn("Node identified under sustained resource pressure",
 			"node", node.Name,
-			"pressures", strings.Join(pressures, ", "),
+			"pressures", pressureDetails(pressures),
 			"duration", maxDuration.Round(time.Second).String(),
 			"dryRun", c.cfg.DryRun,
 		)
@@ -353,6 +416,7 @@ func (c *Cleaner) EvacuateHighPressureNodes(ctx context.Context) error {
 		// Cordon node if enabled
 		if c.cfg.NodePressureCordon && !node.Spec.Unschedulable {
 			if c.cfg.DryRun {
+				c.metrics.AddNodeCordoned()
 				slog.Info("Dry-run: would cordon node", "node", node.Name)
 			} else {
 				nodeCopy := node.DeepCopy()
@@ -360,6 +424,7 @@ func (c *Cleaner) EvacuateHighPressureNodes(ctx context.Context) error {
 				if _, err := c.client.CoreV1().Nodes().Update(ctx, nodeCopy, metav1.UpdateOptions{}); err != nil {
 					slog.Error("Failed to cordon node", "node", node.Name, "error", err)
 				} else {
+					c.metrics.AddNodeCordoned()
 					slog.Info("Successfully cordoned pressured node", "node", node.Name)
 				}
 			}
@@ -415,13 +480,14 @@ func (c *Cleaner) EvacuateHighPressureNodes(ctx context.Context) error {
 				"namespace", pod.Namespace,
 				"pod", pod.Name,
 				"node", node.Name,
-				"pressures", strings.Join(pressures, ", "),
+				"pressures", pressureDetails(pressures),
 				"force", c.cfg.NodePressureForceDelete,
 				"dryRun", c.cfg.DryRun,
 			)
 
 			if c.cfg.DryRun {
 				totalPodsEvacuated++
+				c.metrics.AddPodEvacuated(pod.Namespace)
 				continue
 			}
 
@@ -432,6 +498,7 @@ func (c *Cleaner) EvacuateHighPressureNodes(ctx context.Context) error {
 			}
 
 			if err := c.client.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, deleteOpts); err != nil {
+				c.metrics.AddPodDeleteError(pod.Namespace)
 				slog.Error("Failed to evacuate pod from pressured node",
 					"namespace", pod.Namespace,
 					"pod", pod.Name,
@@ -440,6 +507,7 @@ func (c *Cleaner) EvacuateHighPressureNodes(ctx context.Context) error {
 				)
 			} else {
 				totalPodsEvacuated++
+				c.metrics.AddPodEvacuated(pod.Namespace)
 				slog.Info("Successfully evacuated pod from pressured node",
 					"namespace", pod.Namespace,
 					"pod", pod.Name,
