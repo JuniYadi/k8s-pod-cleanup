@@ -30,5 +30,10 @@ Rules protecting Pods from deletion:
 - **Graceful Deletion**: Deletes pod respecting Kubernetes grace period seconds (default).
 - **Force Deletion**: Deletes pod immediately with zero grace period (`gracePeriodSeconds = 0`) via `--force`.
 
+### Run Metrics
+Measurements describing a single execution of the binary, pushed to a Prometheus Pushgateway when `--pushgateway-url` is set. Every metric is a Gauge scoped to that one run, never a Counter: the Pushgateway replaces the whole group on each push, so a value that decreases between runs is a normal observation rather than a counter reset.
+- **Reason Code**: The low-cardinality label (`terminating_stuck`, `failed_or_evicted`, `pending_stalled`, `crashloop_or_image_error`, `unready`) paired with each free-text deletion reason. The free-text form embeds durations and container names and belongs only in logs.
+- **Component**: Which CronJob is reporting (`pod-cleanup` or `node-pressure`). Both run the same binary, so this is part of the Pushgateway grouping key and keeps one job's metrics from overwriting the other's.
+
 ### Cleaner CronJob
 A containerized Go CLI binary executed periodically by the Kubernetes CronJob controller.
