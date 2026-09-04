@@ -53,7 +53,7 @@ spec:
                 - --excluded-namespaces={{ .Values.cleanup.excludedNamespaces | join "," }}
                 {{- end }}
                 {{- if .Values.metrics.enabled }}
-                - --pushgateway-url={{ .Values.metrics.pushgateway.url }}
+                - --pushgateway-url={{ required "metrics.pushgateway.url is required when metrics.enabled is true" .Values.metrics.pushgateway.url }}
                 - --pushgateway-job={{ .Values.metrics.pushgateway.jobName }}
                 {{- end }}
               {{- if and .Values.metrics.enabled .Values.metrics.pushgateway.auth.existingSecret }}
