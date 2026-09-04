@@ -68,5 +68,11 @@ jobs:
         with:
           context: .
           file: Dockerfile
+          # Both architectures, deliberately without setting up QEMU: the
+          # Dockerfile cross-compiles, so a regression that reintroduces
+          # emulation fails here instead of adding ten minutes to a release.
+          platforms: linux/amd64,linux/arm64
           push: false
           tags: k8s-pod-cleanup:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
