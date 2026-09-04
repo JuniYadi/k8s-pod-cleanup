@@ -78,6 +78,14 @@ spec:
             - kube-system
             - kube-public
             - kube-node-lease
+        nodePressureEviction:
+          enabled: true
+          schedule: "*/2 * * * *"
+          dryRun: false
+          pressureDuration: "1m"
+          forceDelete: true
+          cordon: true
+  destination:
     server: https://kubernetes.default.svc
     namespace: kube-system
   syncPolicy:
@@ -110,6 +118,13 @@ spec:
         cleanup:
           dryRun: false
           thresholdDuration: "10m"
+        nodePressureEviction:
+          enabled: true
+          schedule: "*/2 * * * *"
+          dryRun: false
+          pressureDuration: "1m"
+          forceDelete: true
+          cordon: true
   destination:
     server: https://kubernetes.default.svc
     namespace: kube-system
