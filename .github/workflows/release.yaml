@@ -38,7 +38,9 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+            # Pre-release tags (v0.3.0-dev) must not move "latest": anyone
+            # pulling the default tag would silently get the pre-release.
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
       - name: Build and Push Multi-Arch Image
         uses: docker/build-push-action@v6
@@ -96,6 +98,7 @@ jobs:
         with:
           tag_name: ${{ steps.get_version.outputs.tag }}
           name: Release ${{ steps.get_version.outputs.tag }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             .cr-release-packages/k8s-pod-cleanup-${{ steps.get_version.outputs.version }}.tgz
           generate_release_notes: true
