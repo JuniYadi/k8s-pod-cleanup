@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/juniyadi/k8s-pod-cleanup/internal/cleaner"
 	"github.com/juniyadi/k8s-pod-cleanup/internal/config"
+	"github.com/juniyadi/k8s-pod-cleanup/internal/metrics"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -43,12 +45,54 @@ func run() error {
 	appCleaner := cleaner.NewCleaner(clientset, cfg)
 	ctx := context.Background()
 
-	if err := appCleaner.Run(ctx); err != nil {
-		return fmt.Errorf("error executing pod cleanup: %w", err)
+	start := time.Now()
+	runErr := appCleaner.Run(ctx)
+
+	appCleaner.Metrics().Finish(time.Since(start), runErr == nil)
+	pushMetrics(ctx, appCleaner.Metrics(), cfg)
+
+	if runErr != nil {
+		return fmt.Errorf("error executing pod cleanup: %w", runErr)
 	}
 
 	slog.Info("k8s-pod-cleanup execution finished successfully")
 	return nil
+}
+
+// pushMetrics ships the run's metrics to the Pushgateway, if one is configured.
+//
+// A push failure is logged but never fails the run: the cleanup itself already
+// happened, and exiting non-zero would make the CronJob retry deletions to fix
+// what is only a monitoring problem. Alert on k8s_pod_cleanup_last_run_timestamp_seconds
+// going stale instead.
+func pushMetrics(ctx context.Context, recorder *metrics.Recorder, cfg *config.Config) {
+	if cfg.PushgatewayURL == "" {
+		return
+	}
+
+	opts := metrics.PushOptions{
+		URL:       cfg.PushgatewayURL,
+		Job:       cfg.PushgatewayJob,
+		Component: cfg.MetricsComponent(),
+		Username:  cfg.PushgatewayUsername,
+		Password:  cfg.PushgatewayPassword,
+	}
+
+	if err := recorder.Push(ctx, opts); err != nil {
+		slog.Error("Failed to push metrics to Pushgateway",
+			"url", cfg.PushgatewayURL,
+			"job", cfg.PushgatewayJob,
+			"component", opts.Component,
+			"error", err,
+		)
+		return
+	}
+
+	slog.Info("Pushed run metrics to Pushgateway",
+		"url", cfg.PushgatewayURL,
+		"job", cfg.PushgatewayJob,
+		"component", opts.Component,
+	)
 }
 
 func setupLogger(levelStr string) {
