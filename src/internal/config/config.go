@@ -10,20 +10,34 @@ import (
 
 // Config represents runtime settings for the cleaner.
 type Config struct {
-	Kubeconfig                  string
-	Namespaces                  []string // if empty, scan all namespaces
-	ExcludedNamespaces          []string
-	IgnoreAnnotation            string
-	ThresholdDuration           time.Duration
-	RestartThreshold            int32
-	DryRun                      bool
-	Force                       bool
-	LogLevel                    string
-	TerminationThreshold        time.Duration
-	EnableNodePressureEviction  bool
-	NodePressureDuration        time.Duration
-	NodePressureForceDelete     bool
-	NodePressureCordon          bool
+	Kubeconfig                 string
+	Namespaces                 []string // if empty, scan all namespaces
+	ExcludedNamespaces         []string
+	IgnoreAnnotation           string
+	ThresholdDuration          time.Duration
+	RestartThreshold           int32
+	DryRun                     bool
+	Force                      bool
+	LogLevel                   string
+	TerminationThreshold       time.Duration
+	EnableNodePressureEviction bool
+	NodePressureDuration       time.Duration
+	NodePressureForceDelete    bool
+	NodePressureCordon         bool
+	PushgatewayURL             string
+	PushgatewayJob             string
+	PushgatewayUsername        string
+	PushgatewayPassword        string
+}
+
+// MetricsComponent identifies which of the two CronJobs is reporting. Both run
+// the same binary, so without a distinct grouping key each push would overwrite
+// the other's metrics in the Pushgateway.
+func (c *Config) MetricsComponent() string {
+	if c.EnableNodePressureEviction {
+		return "node-pressure"
+	}
+	return "pod-cleanup"
 }
 
 // DefaultExcludedNamespaces is the default list of system namespaces to skip.
@@ -32,6 +46,7 @@ var DefaultExcludedNamespaces = []string{
 	"kube-public",
 	"kube-node-lease",
 }
+
 func ParseFlags() (*Config, error) {
 	return ParseFlagsWithArgs(os.Args[1:])
 }
@@ -68,6 +83,13 @@ func ParseFlagsWithArgs(args []string) (*Config, error) {
 	fs.DurationVar(&cfg.NodePressureDuration, "node-pressure-duration", getEnvDuration("NODE_PRESSURE_DURATION", 1*time.Minute), "Minimum duration a node must be under pressure before evicting pods.")
 	fs.BoolVar(&cfg.NodePressureForceDelete, "node-pressure-force-delete", getEnvBool("NODE_PRESSURE_FORCE_DELETE", true), "Force delete pods immediately (gracePeriodSeconds=0) when evicting from pressured nodes.")
 	fs.BoolVar(&cfg.NodePressureCordon, "node-pressure-cordon", getEnvBool("NODE_PRESSURE_CORDON", true), "Cordon node (mark unschedulable) when node pressure is detected.")
+	fs.StringVar(&cfg.PushgatewayURL, "pushgateway-url", getEnv("PUSHGATEWAY_URL", ""), "Prometheus Pushgateway base URL. Metrics are not pushed when empty.")
+	fs.StringVar(&cfg.PushgatewayJob, "pushgateway-job", getEnv("PUSHGATEWAY_JOB", "k8s-pod-cleanup"), "Prometheus job name used as the Pushgateway grouping key.")
+
+	// Credentials are env-only on purpose: flags end up in the CronJob spec and
+	// in the process command line, where anyone with pod read access can see them.
+	cfg.PushgatewayUsername = getEnv("PUSHGATEWAY_USERNAME", "")
+	cfg.PushgatewayPassword = getEnv("PUSHGATEWAY_PASSWORD", "")
 
 	if err := fs.Parse(cleanArgs); err != nil {
 		return nil, err
