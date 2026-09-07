@@ -208,20 +208,59 @@ Both CronJobs run the same binary, so each pushes under its own `component` grou
 
 `reason` is one of `terminating_stuck`, `failed_or_evicted`, `pending_stalled`, `crashloop_or_image_error`, `unready`. `condition` is one of `memory_pressure`, `disk_pressure`, `pid_pressure`, `not_ready`.
 
+### Scraping the Pushgateway
+
+Set `honor_labels: true`. Without it Prometheus treats the pushed `job` label as a collision and renames it to `exported_job`, replacing `job` with the scrape job's own name:
+
+```yaml
+scrape_configs:
+  - job_name: pushgateway
+    honor_labels: true
+    static_configs:
+      - targets: ["prometheus-pushgateway.monitoring.svc:9091"]
+```
+
+The dashboard below deliberately never filters on `job`, so it works either way — but any alert you write against `job="k8s-pod-cleanup"` silently matches nothing without this setting.
+
 ### Querying
 
-Every metric is a **Gauge describing a single run**, not a Counter. Each run reports only its own work and replaces the previous group in the Pushgateway, so a value going from `5` to `2` is a normal observation rather than a counter reset — `rate()` and `increase()` would produce nonsense here. Aggregate across runs with `sum_over_time()`:
+Every metric is a **Gauge describing a single run**, not a Counter. Each run reports only its own work and replaces the previous group in the Pushgateway, so a value going from `5` to `2` is a normal observation rather than a counter reset. `rate()` and `increase()` produce nonsense here.
+
+`sum_over_time()` is also wrong, for a less obvious reason: the Pushgateway serves the same value on every scrape until the next push. A CronJob running every 5 minutes, scraped every 15 seconds, has each run's value counted about 20 times over. Plot the per-run value directly instead:
 
 ```promql
-# Pods deleted in the last hour, by reason
-sum by (reason) (sum_over_time(k8s_pod_cleanup_pods_deleted[1h]))
+# Pods deleted per run, by reason — each point is one run
+sum by (reason) (k8s_pod_cleanup_pods_deleted)
+```
 
-# Alert: cleanup has not reported in 30 minutes
+For a total across a time range, multiply the time-weighted average by the number of pushes actually observed. This is exact for an evenly scheduled CronJob and needs no knowledge of the scrape interval:
+
+```promql
+sum by (reason) (avg_over_time(k8s_pod_cleanup_pods_deleted[1h]))
+  * scalar(max(changes(k8s_pod_cleanup_last_run_timestamp_seconds{component="pod-cleanup"}[1h])))
+```
+
+Useful alerts:
+
+```promql
+# Cleanup has not reported in 30 minutes (catches a failed push, a suspended
+# CronJob, or a cluster the job can no longer reach)
 time() - k8s_pod_cleanup_last_run_timestamp_seconds > 1800
 
-# Alert: last run failed
+# Last run returned an error
 k8s_pod_cleanup_run_success == 0
+
+# Deletions are failing — usually a stuck finalizer or missing RBAC
+sum by (namespace) (k8s_pod_cleanup_pod_delete_errors) > 0
 ```
+
+A push failure is logged but never fails the run — the cleanup itself already happened, and exiting non-zero would make the CronJob retry deletions to fix a monitoring problem. The staleness alert above is what catches that case.
+
+### Grafana dashboard
+
+[`example/grafana-dashboard.json`](example/grafana-dashboard.json) — import via **Dashboards → New → Import → Upload JSON file**, then pick your Prometheus datasource when prompted.
+
+Eleven panels across three rows: run health (last-run age, status, duration, dry-run mode), pod cleanup (deletions by reason, evaluated vs deleted, per-namespace table, deletion errors), and node pressure (nodes evaluated/pressured/cordoned, conditions by type, pods evacuated). `Component` and `Namespace` template variables filter everything.
 
 A push failure is logged but never fails the run — the cleanup itself already happened, and exiting non-zero would make the CronJob retry deletions to fix a monitoring problem. Alert on `k8s_pod_cleanup_last_run_timestamp_seconds` going stale to catch that case.
 
